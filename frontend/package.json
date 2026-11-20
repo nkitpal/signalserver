@@ -1,0 +1,21 @@
+{
+  "name": "signalserver-gui-frontend",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "cesium": "1.147.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vite-plugin-static-copy": "4.1.1"
+  }
+}

@@ -11,3 +11,5 @@ frontend/dist/
 *.code-workspace
 .vscode/
 .DS_Store
+frontend/test-results/
+frontend/playwright-report/

@@ -21,7 +21,7 @@ class HeightSampler:
     def __init__(self, hgt_dir: Path, max_open: int = 48):
         self.hgt_dir = hgt_dir
         self.max_open = max_open
-        self._cache: OrderedDict[TileId, np.ndarray | None] = OrderedDict()
+        self._cache: OrderedDict[TileId, np.ndarray] = OrderedDict()
         self._lock = threading.Lock()
 
     def _grid(self, tile: TileId) -> np.ndarray | None:
@@ -30,9 +30,10 @@ class HeightSampler:
                 self._cache.move_to_end(tile)
                 return self._cache[tile]
         path = self.hgt_dir / tile.hgt_name
-        grid = read_hgt(path) if path.exists() else None
-        if grid is not None:
-            grid = np.where(grid == -32768, 0, grid).astype(np.int16)
+        if not path.exists():
+            return None  # not cached: re-checked on every request so new downloads show up
+        grid = read_hgt(path)
+        grid = np.where(grid == -32768, 0, grid).astype(np.int16)
         with self._lock:
             self._cache[tile] = grid
             while len(self._cache) > self.max_open:
