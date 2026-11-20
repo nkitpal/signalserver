@@ -7,7 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY scripts/build-signalserver.sh /tmp/
 ARG SIGNALSERVER_REF=7f6242a
-RUN SIGNALSERVER_REF=${SIGNALSERVER_REF} /tmp/build-signalserver.sh /opt/signalserver
+# sed strips Windows line endings in case the checkout converted them.
+RUN sed -i 's/\r$//' /tmp/build-signalserver.sh \
+    && SIGNALSERVER_REF=${SIGNALSERVER_REF} bash /tmp/build-signalserver.sh /opt/signalserver
 
 # --- Frontend --------------------------------------------------------------
 FROM node:22-bookworm-slim AS frontend
