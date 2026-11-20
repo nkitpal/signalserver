@@ -1,0 +1,58 @@
+# Signal Server GUI: PostGIS + web/API + background worker(s).
+#   docker compose up -d --build        then open http://localhost:8080
+#   docker compose up -d --scale worker=3   to run plots in parallel
+name: signalserver
+
+x-app: &app
+  build: .
+  image: signalserver-gui:latest
+  restart: unless-stopped
+  environment: &env
+    SSG_DATABASE_URL: postgresql+psycopg://signalserver:${POSTGRES_PASSWORD:-signalserver}@db:5432/signalserver
+    SSG_CESIUM_ION_TOKEN: ${CESIUM_ION_TOKEN:-}
+    SSG_ELEVATION_AUTO_DOWNLOAD: ${ELEVATION_AUTO_DOWNLOAD:-true}
+  volumes:
+    - appdata:/data
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: signalserver
+      POSTGRES_USER: signalserver
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-signalserver}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U signalserver -d signalserver"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    <<: *app
+    restart: "no"
+    command: ["signalserver-gui", "init"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    command: ["signalserver-gui", "serve"]
+    ports:
+      - "${PORT:-8080}:8080"
+
+  worker:
+    <<: *app
+    command: ["signalserver-gui", "worker"]
+    healthcheck:
+      disable: true
+
+volumes:
+  pgdata:
+  appdata:

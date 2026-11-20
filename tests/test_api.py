@@ -116,6 +116,7 @@ def test_sea_tile_and_failure_reporting(client, worker, settings):
         settings.signalserver_path = original
     detail = client.get(f"/api/runs/{run['id']}").json()
     assert detail["status"] == "failed" and "not found" in detail["error"]
+    assert detail["command"][0] == "/nonexistent/signalserver"
 
 
 def test_prefetch_job(client, worker):

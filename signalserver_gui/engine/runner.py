@@ -28,7 +28,10 @@ ProgressFn = Callable[[float, str], None]
 
 
 class RunError(RuntimeError):
-    pass
+    def __init__(self, message: str, command: list[str] | None = None, output: str = ""):
+        super().__init__(message)
+        self.command = command or []
+        self.output = output
 
 
 def _exec(cmd: list[str], cwd: Path, timeout: int) -> str:
@@ -38,11 +41,12 @@ def _exec(cmd: list[str], cwd: Path, timeout: int) -> str:
             timeout=timeout, check=False, text=True,
         )
     except FileNotFoundError as exc:
-        raise RunError(f"Signal-Server binary not found: {cmd[0]}") from exc
+        raise RunError(f"Signal-Server binary not found: {cmd[0]}", cmd) from exc
     except subprocess.TimeoutExpired as exc:
-        raise RunError(f"Signal-Server timed out after {timeout}s") from exc
+        raise RunError(f"Signal-Server timed out after {timeout}s", cmd) from exc
     if proc.returncode != 0:
-        raise RunError(f"Signal-Server exited with code {proc.returncode}:\n{proc.stdout[-4000:]}")
+        reason = "crashed (segmentation fault)" if proc.returncode == -11 else f"exited with code {proc.returncode}"
+        raise RunError(f"Signal-Server {reason}:\n{proc.stdout[-4000:]}", cmd, proc.stdout)
     return proc.stdout
 
 
@@ -91,7 +95,7 @@ def execute_run(
         bounds = outputs.parse_bounds(out)
     log_parts = [out]
     if bounds is None:
-        raise RunError("Signal-Server did not report valid plot boundaries.\n" + out[-3000:])
+        raise RunError("Signal-Server did not report valid plot boundaries.\n" + out[-3000:], cmd, out)
 
     progress(0.75, "writing outputs")
     rgba = outputs.ppm_to_rgba(base.with_suffix(".ppm"))

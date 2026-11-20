@@ -122,12 +122,26 @@ class Worker:
                 log.exception("Job %s failed", job_id)
                 session.rollback()
                 job = session.get(Job, job_id)
+                self._record_failure(session, job, exc)
                 job.status = JobStatus.failed
                 job.error = str(exc)[-8000:]
                 job.stage = "failed"
                 job.finished_at = now()
                 session.commit()
             return True
+
+    @staticmethod
+    def _record_failure(session: Session, job: Job, exc: Exception) -> None:
+        """Keep the command line and engine output of a failed plot run for debugging."""
+        if job.kind != "plot_run":
+            return
+        run = session.get(PlotRun, job.payload.get("run_id"))
+        if run is None:
+            return
+        command = getattr(exc, "command", None)
+        if command:
+            run.command = [str(c) for c in command]
+        run.log = (getattr(exc, "output", "") or str(exc))[-20000:]
 
     def _dispatch(self, session: Session, job: Job, progress) -> None:
         if job.kind == "plot_run":
