@@ -1,0 +1,65 @@
+
+		--==[ Path Profile Analysis ]==--
+
+Transmitter site: Tx
+Site location: 51.5000, -0.5000
+Ground elevation: 25.00 meters AMSL
+Antenna height: 30.00 meters AGL / 55.00 meters AMSL
+Distance to Rx: 6.55 kilometers
+Azimuth to Rx: 31.87 degrees grid
+Downtilt angle to Rx: -0.1432 degrees
+
+Receiver site: Rx
+Site location: 51.5500, -0.4500
+Ground elevation: 40.00 meters AMSL
+Antenna height: 2.00 meters AGL / 42.00 meters AMSL
+Distance to Tx: 6.55 kilometers
+Azimuth to Tx: 211.91 degrees grid
+Downtilt angle to Tx: +0.0843 degrees
+
+
+Propagation model: Irregular Terrain Model
+Model sub-type: City / Conservative
+Earth's Dielectric Constant: 15.000
+Earth's Conductivity: 0.005 Siemens/meter
+Atmospheric Bending Constant (N-units): 301.000 ppm
+Frequency: 450.000 MHz
+Radio Climate: 5 (Continental Temperate)
+Polarisation: 1 (Vertical)
+Fraction of Situations: 50.0%
+Fraction of Time: 50.0%
+
+Receiver gain: 0.0 dBd / 2.1 dBi
+Transmitter ERP plus Receiver gain: 25 Watts (+43.98 dBm)
+Transmitter ERP minus Receiver gain: 43.98 dBm
+Transmitter EIRP plus Receiver gain: 41 Watts (+46.12 dBm)
+Transmitter EIRP minus Receiver gain: 46.12 dBm
+
+Summary for the link between Tx and Rx:
+
+Free space path loss: 101.85 dB
+Computed path loss: 122.12 dB
+Attenuation due to terrain shielding: 20.26 dB
+Field strength at Rx: 54.33 dBuV/meter
+Signal power level at Rx: -76.00 dBm
+Signal power density at Rx: -91.46 dBW per square meter
+Voltage across 50 ohm dipole at Rx: 45.35 uV (33.13 dBuV)
+Voltage across 75 ohm dipole at Rx: 55.55 uV (34.89 dBuV)
+Longley-Rice model error number: 3
+  Warning: A combination of parameters is out of range for this model.
+  Results should be used with caution.
+Between Rx and Tx, obstructions were detected at:
+
+    51.5442 N,   0.4558 W,  0.76 kilometers,  46.00 meters AMSL
+    51.5436 N,   0.4564 W,  0.84 kilometers,  49.00 meters AMSL
+    51.5424 N,   0.4576 W,  0.99 kilometers,  58.00 meters AMSL
+    51.5418 N,   0.4582 W,  1.07 kilometers,  61.00 meters AMSL
+
+Antenna at Rx must be raised to at least 22.73 meters AGL
+to clear all obstructions detected.
+
+Antenna at Rx must be raised to at least 55.34 meters AGL
+to clear the first Fresnel zone.
+
+Antenna at Rx must be raised to at least 41.01 meters AGL
+to clear 60% of the first Fresnel zone.
