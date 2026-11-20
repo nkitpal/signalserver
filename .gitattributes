@@ -1,0 +1,11 @@
+# Keep Unix line endings for files that run inside Linux containers,
+# even when the repo is checked out on Windows (core.autocrlf=true).
+* text=auto eol=lf
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.py text eol=lf
+*.ini text eol=lf
+*.mako text eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
