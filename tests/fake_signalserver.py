@@ -29,7 +29,8 @@ if len(os.path.basename(out)) < 5:
 
 sdf_dir = opt("-sdf")
 west = (-(math.floor(lon) + 1)) % 360
-tile = f"{math.floor(lat)}_{math.floor(lat) + 1}_{west}_{west + 1}.sdf"
+hd = os.environ.get("SSG_FAKE_BINARY", os.path.basename(sys.argv[0])).endswith("HD")
+tile = f"{math.floor(lat)}_{math.floor(lat) + 1}_{west}_{west + 1}{'-hd' if hd else ''}.sdf"
 if not os.path.exists(os.path.join(sdf_dir, tile)):
     print(f"[error] missing tile {tile}")
     sys.exit(2)
@@ -43,13 +44,26 @@ if "-rla" in args:
                 fh.write(f"{i * 0.5:.3f} {100 + i:.3f}\n")
     sys.exit(0)
 
+# Colour pixels with the bands of the -color palette (like the engine does):
+# band index grows with distance from the centre.
+palette = []
+color = opt("-color")
+if color:
+    for line in open(color):
+        level, rgb = line.split(":", 1)
+        palette.append(tuple(int(c) for c in rgb.split(",")))
 w, h = 40, 30
 with open(out + ".ppm", "wb") as fh:
     fh.write(f"P6\n{w} {h}\n255\n".encode())
     for y in range(h):
         for x in range(w):
-            inside = (x - w / 2) ** 2 + (y - h / 2) ** 2 < 100
-            fh.write(bytes((0, 200, 0) if inside else (255, 255, 255)))
+            d2 = (x - w / 2) ** 2 + (y - h / 2) ** 2
+            if d2 < 100 and palette:
+                fh.write(bytes(palette[min(int(d2 ** 0.5) * 3 + 20, len(palette) - 1)]))
+            elif d2 < 100:
+                fh.write(bytes((0, 200, 0)))
+            else:
+                fh.write(bytes((255, 255, 255)))
 dlat = radius / 111.2
 dlon = dlat / math.cos(math.radians(lat))
 print(f"[info] Area boundaries:{lat + dlat:.6f} | {lon + dlon:.6f} | {lat - dlat:.6f} | {lon - dlon:.6f} ")

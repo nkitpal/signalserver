@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import __version__
 from ..config import Settings, get_settings
 from ..engine.patterns import list_palettes
-from . import elevation, resources, runs
+from . import basemaps, elevation, projects, resources, runs
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +44,8 @@ def create_app(settings: Settings | None = None, with_worker: bool = False) -> F
         app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
                            allow_methods=["*"], allow_headers=["*"])
 
+    app.include_router(projects.router)
+    app.include_router(basemaps.router)
     app.include_router(resources.router)
     app.include_router(runs.router)
     app.include_router(elevation.router)
@@ -65,6 +67,11 @@ def create_app(settings: Settings | None = None, with_worker: bool = False) -> F
                 {"id": "satellite", "name": "Satellite", "url": s.satellite_url, "credit": s.satellite_credit},
             ],
             "palettes": list_palettes(s.color_dir),
+            "elevation_models": {
+                "dem3": "DEM3 90 m (terrain)",
+                "cop30": "Copernicus 30 m (surface)",
+                "cop30_buildings": "Copernicus 30 m + OSM buildings",
+            },
             "propagation_models": PROPAGATION_MODELS,
         }
 

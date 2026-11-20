@@ -21,6 +21,17 @@ from . import outputs
 from .command import build_args
 from .patterns import palette_file, read_palette
 from .report import parse_report, read_profile
+from .values import (
+    colorize,
+    decode_indices,
+    index_to_values,
+    quantity_for,
+    write_measurement_palette,
+)
+
+# Signal-Server's tile page limits (main.cc): 100 pages normally, 32 in HD mode.
+SD_MAX_TILES = 100
+HD_MAX_TILES = 32
 
 log = logging.getLogger(__name__)
 
@@ -69,27 +80,42 @@ def execute_run(
         w, s = min(tx["longitude"], rx["longitude"]), min(tx["latitude"], rx["latitude"])
         e, n = max(tx["longitude"], rx["longitude"]), max(tx["latitude"], rx["latitude"])
         tiles |= set(tiles_for_bbox(w - 0.05, s - 0.05, e + 0.05, n + 0.05))
-    provider = ElevationProvider(settings, session)
-    sdf_dir = provider.ensure_tiles(tiles, lambda f, s: progress(0.05 + 0.35 * f, s)).resolve()
+    model = p.get("elevation_model", "dem3")
+    hd = p["resolution"] == 3600
+    limit = HD_MAX_TILES if hd else SD_MAX_TILES
+    if len(tiles) > limit:
+        raise RunError(
+            f"This plot needs {len(tiles)} elevation tiles but the engine holds at most {limit} "
+            f"at this resolution; reduce the radius{' or use 1200 ppd' if hd else ''}."
+        )
+    provider = ElevationProvider(settings, session, model=model)
+    sdf_dir = provider.ensure_tiles(tiles, lambda f, s: progress(0.05 + 0.35 * f, s), hd=hd).resolve()
 
     # 2. Coverage --------------------------------------------------------
+    # The engine runs with a 128-band measurement palette so each pixel can be
+    # decoded back to its value; the display image is coloured from those values.
     progress(0.45, "computing coverage")
+    quantity = quantity_for(p)
+    measure = write_measurement_palette(quantity, run_dir)
     palette = palette_file(settings.color_dir, p["color_palette"], p["use_dbm"], p["erp_watts"])
     base = run_dir / "coverage"
     binary = settings.engine_binary(p["resolution"])
     args = build_args(
         p, sdf_dir=sdf_dir, antenna_dir=settings.antenna_dir.resolve(),
-        palette=palette.resolve() if palette.exists() else None,
+        palette=Path(measure),
         # Relative: the engine copies output names into 80 byte buffers.
         output_base=Path(base.name),
     )
+    # signalserverHD segfaults intermittently when threaded; run it single-threaded.
+    if hd:
+        args = ["-nothreads", *args]
     cmd = [binary, *args]
     run.command = cmd
     out = _exec(cmd, run_dir, settings.engine_timeout_s)
     bounds = outputs.parse_bounds(out)
     if bounds is None or not base.with_suffix(".ppm").exists():
         log.warning("Engine produced invalid bounds; retrying single-threaded")
-        cmd = [binary, "-nothreads", *args]
+        cmd = [binary, *(["-nothreads"] if "-nothreads" not in args else []), *args]
         run.command = cmd
         out = _exec(cmd, run_dir, settings.engine_timeout_s)
         bounds = outputs.parse_bounds(out)
@@ -98,12 +124,19 @@ def execute_run(
         raise RunError("Signal-Server did not report valid plot boundaries.\n" + out[-3000:], cmd, out)
 
     progress(0.75, "writing outputs")
-    rgba = outputs.ppm_to_rgba(base.with_suffix(".ppm"))
+    index = decode_indices(outputs.read_rgb(base.with_suffix(".ppm")))
+    legend = read_palette(palette) if palette.exists() else []
+    rgba = colorize(index, quantity, legend)
     outputs.write_png(rgba, run_dir / "coverage.png")
     outputs.write_cog(rgba, bounds, run_dir / "coverage.tif")
+    outputs.write_index_png(index, run_dir / "values.png")
+    outputs.write_values_tif(index_to_values(index, quantity), bounds, run_dir / "values.tif",
+                             quantity.unit)
     base.with_suffix(".ppm").unlink(missing_ok=True)
+    (run_dir / measure).unlink(missing_ok=True)
     run.set_bounds(*bounds)
-    run.legend = read_palette(palette) if palette.exists() else []
+    run.legend = legend
+    run.value_top, run.value_step, run.value_unit = quantity.top, quantity.step, quantity.unit
 
     # 3. Point-to-point analysis ----------------------------------------
     report = None

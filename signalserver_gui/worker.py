@@ -150,12 +150,19 @@ class Worker:
                 raise RuntimeError("plot run no longer exists")
             execute_run(run, session, self.settings, progress)
             session.commit()
+        elif job.kind == "basemap_pack":
+            from .basemap import build_pack
+
+            build_pack(session, self.settings, job.payload["pack_id"], progress)
         elif job.kind == "elevation_prefetch":
             bbox = job.payload["bbox"]
             tiles = tiles_for_bbox(*bbox)
             if len(tiles) > MAX_PREFETCH_TILES:
                 raise ValueError(f"area too large: {len(tiles)} tiles (max {MAX_PREFETCH_TILES})")
-            ElevationProvider(self.settings, session).ensure_tiles(tiles, progress)
+            model = job.payload.get("model", "dem3")
+            ElevationProvider(self.settings, session, model=model).ensure_tiles(
+                tiles, progress, hd=bool(job.payload.get("hd"))
+            )
         else:
             raise ValueError(f"unknown job kind {job.kind!r}")
 

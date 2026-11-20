@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     elevation_keep_archives: bool = False
     elevation_download_timeout_s: int = 600
     viewfinder_index_path: Path | None = None
+    copernicus_url: str = "https://copernicus-dem-30m.s3.amazonaws.com"
+    overpass_url: str = "https://overpass-api.de/api/interpreter"
+    building_default_height_m: float = 6.0
+
+    # Offline street maps (Protomaps daily planet builds, PMTiles)
+    basemap_builds_url: str = "https://build-metadata.protomaps.dev/builds.json"
+    basemap_source_url: str = "https://build.protomaps.com"
+    basemap_max_tiles: int = 400_000
 
     # Worker
     worker_poll_interval_s: float = 1.0
@@ -56,6 +64,32 @@ class Settings(BaseSettings):
     def sdf_dir(self) -> Path:
         return self.elevation_dir / "sdf"
 
+    def sdf_dir_for(self, model: str) -> Path:
+        return {"dem3": self.sdf_dir, "cop30": self.elevation_dir / "sdf-cop30",
+                "cop30_buildings": self.elevation_dir / "sdf-cop30b"}[model]
+
+    @property
+    def hgt1_dir(self) -> Path:
+        """Copernicus GLO-30 tiles resampled to 3601x3601 HGT grids."""
+        return self.elevation_dir / "hgt1"
+
+    @property
+    def hgt1b_dir(self) -> Path:
+        """GLO-30 grids with OSM buildings burned in."""
+        return self.elevation_dir / "hgt1b"
+
+    @property
+    def osm_dir(self) -> Path:
+        return self.elevation_dir / "osm"
+
+    @property
+    def layers_dir(self) -> Path:
+        return self.data_dir / "layers"
+
+    @property
+    def basemap_dir(self) -> Path:
+        return self.data_dir / "basemaps"
+
     @property
     def archive_dir(self) -> Path:
         return self.elevation_dir / "archives"
@@ -81,7 +115,9 @@ class Settings(BaseSettings):
 
     def ensure_dirs(self) -> None:
         for d in (self.hgt_dir, self.sdf_dir, self.archive_dir, self.antenna_dir,
-                  self.color_dir, self.runs_dir):
+                  self.color_dir, self.runs_dir, self.hgt1_dir, self.hgt1b_dir, self.osm_dir,
+                  self.sdf_dir_for("cop30"), self.sdf_dir_for("cop30_buildings"),
+                  self.layers_dir, self.basemap_dir):
             d.mkdir(parents=True, exist_ok=True)
 
 

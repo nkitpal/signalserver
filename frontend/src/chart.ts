@@ -73,3 +73,45 @@ export function chartLegend(): HTMLElement {
   }
   return wrap;
 }
+
+/** Simple terrain profile (distance km, height m) for the measuring tool. */
+export function terrainChart(points: [number, number][], width = 340, height = 150): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("class", "chart");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Terrain profile along the measured line");
+  if (points.length < 2) return svg;
+  const pad = { l: 40, r: 22, t: 8, b: 22 };
+  const xs = points.map((p) => p[0]);
+  const ys = points.map((p) => p[1]);
+  const x1 = Math.max(...xs) || 1;
+  const yMin = Math.min(...ys);
+  const yMax = Math.max(...ys);
+  const y0 = Math.floor(yMin - (yMax - yMin) * 0.1);
+  const yTop = Math.ceil(yMax + (yMax - yMin) * 0.1 + 1);
+  const sx = (x: number) => pad.l + (x / x1) * (width - pad.l - pad.r);
+  const sy = (y: number) => height - pad.b - ((y - y0) / (yTop - y0)) * (height - pad.t - pad.b);
+  const add = (tag: string, attrs: Record<string, string | number>) => {
+    const el = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
+    svg.appendChild(el);
+    return el;
+  };
+  for (let i = 0; i <= 3; i++) {
+    const y = y0 + ((yTop - y0) * i) / 3;
+    add("line", { x1: pad.l, x2: width - pad.r, y1: sy(y), y2: sy(y), class: "grid" });
+    add("text", { x: pad.l - 4, y: sy(y) + 3, "text-anchor": "end", class: "tick" }).textContent = `${Math.round(y)}`;
+  }
+  for (let i = 0; i <= 4; i++) {
+    const x = (x1 * i) / 4;
+    add("text", { x: sx(x), y: height - 6, "text-anchor": "middle", class: "tick" }).textContent = `${x.toFixed(1)}km`;
+  }
+  const d = points.map((p, i) => `${i ? "L" : "M"}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join("");
+  add("path", { d: `${d}L${sx(x1)},${sy(y0)}L${sx(0)},${sy(y0)}Z`, fill: "#8a6a3b", "fill-opacity": 0.55, stroke: "#c49a5a" });
+  // Straight line of sight between the two end points (ground to ground).
+  add("line", { x1: sx(0), y1: sy(points[0][1]), x2: sx(x1), y2: sy(points[points.length - 1][1]),
+    stroke: "#e8edf3", "stroke-dasharray": "5 4", "stroke-width": 1.2 });
+  return svg;
+}

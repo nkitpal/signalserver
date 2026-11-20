@@ -24,15 +24,26 @@ import {
   PolylineDashMaterialProperty,
   NearFarScalar,
   DistanceDisplayCondition,
+  KmlDataSource,
+  type DataSource,
 } from "cesium";
 import "cesium/Build/Cesium/Widgets/widgets.css";
-import type { GeoJSON, PathReport, RunSummary, Station, ViewerConfig } from "./api";
+import type { BasemapPack, GeoJSON, Layer, PathReport, RunSummary, Station, ViewerConfig } from "./api";
+import type { Composite } from "./analysis";
+import { VectorTileImageryProvider } from "./offline";
 
 const TERRAIN_SIZE = 32;
 
 export class Globe {
   viewer: Viewer;
-  private baseLayer: ImageryLayer | null = null;
+  private baseLayers: ImageryLayer[] = [];
+  private baseId = "";
+  private packs: BasemapPack[] = [];
+  private compositeLayer: ImageryLayer | null = null;
+  private kml = new Map<number, DataSource>();
+  /** Map click consumer (e.g. measuring tools); return true to stop default handling. */
+  clickHook: ((lat: number, lon: number) => boolean) | null = null;
+  finishHook: (() => void) | null = null;
   private coverage = new Map<number, ImageryLayer>();
   private stationEntities = new Map<number, Entity>();
   private pathEntities: Entity[] = [];
@@ -68,6 +79,7 @@ export class Globe {
     handler.setInputAction((ev: { position: Cartesian2 }) => {
       const picked = scene.pick(ev.position);
       const ll = this.pickLatLon(ev.position);
+      if (ll && this.clickHook && this.clickHook(ll[0], ll[1])) return;
       if (this.pickHandler && ll) {
         const cb = this.pickHandler;
         this.pickHandler = null;
@@ -80,6 +92,8 @@ export class Globe {
         if (typeof sid === "number" && this.onStationClick) this.onStationClick(sid);
       }
     }, ScreenSpaceEventType.LEFT_CLICK);
+    handler.setInputAction(() => this.finishHook?.(), ScreenSpaceEventType.RIGHT_CLICK);
+    handler.setInputAction(() => this.finishHook?.(), ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
     handler.setInputAction((ev: { endPosition: Cartesian2 }) => {
       const ll = this.pickLatLon(ev.endPosition);
       if (ll && this.onCursor) this.onCursor(ll[0], ll[1]);
@@ -111,15 +125,89 @@ export class Globe {
     }
   }
 
+  /** Base map: an online tile template id, "offline" (downloaded packs) or "none". */
   setImagery(id: string) {
+    this.baseId = id;
+    const layers = this.viewer.imageryLayers;
+    for (const l of this.baseLayers) layers.remove(l, true);
+    this.baseLayers = [];
+    if (id === "none") return;
+    if (id === "offline") {
+      const ready = this.packs.filter((p) => p.ready);
+      if (!ready.length) return;
+      // Low zooms for the whole world from the first pack, detail inside every pack.
+      this.baseLayers.push(layers.addImageryProvider(
+        new VectorTileImageryProvider(ready[0], { world: true, maximumLevel: 4 }), 0));
+      for (const p of ready)
+        this.baseLayers.push(layers.addImageryProvider(
+          new VectorTileImageryProvider(p, { minimumLevel: 0, maximumLevel: 18 }), this.baseLayers.length));
+      return;
+    }
     const src = this.config.imagery.find((i) => i.id === id) ?? this.config.imagery[0];
     if (!src) return;
-    const layers = this.viewer.imageryLayers;
-    if (this.baseLayer) layers.remove(this.baseLayer, true);
-    this.baseLayer = layers.addImageryProvider(
+    this.baseLayers.push(layers.addImageryProvider(
       new UrlTemplateImageryProvider({ url: src.url, credit: src.credit, maximumLevel: 19 }),
       0,
-    );
+    ));
+  }
+
+  setOfflinePacks(packs: BasemapPack[]) {
+    this.packs = packs;
+    if (this.baseId === "offline") this.setImagery("offline");
+  }
+
+  // Imported KML layers ------------------------------------------------------
+  async showKml(layer: Layer) {
+    if (this.kml.has(layer.id)) return;
+    try {
+      const ds = await KmlDataSource.load(layer.url, {
+        camera: this.viewer.scene.camera,
+        canvas: this.viewer.scene.canvas,
+        clampToGround: true,
+      });
+      await this.viewer.dataSources.add(ds);
+      this.kml.set(layer.id, ds);
+    } catch (e) {
+      console.error("KML load failed", e);
+      throw e;
+    }
+  }
+
+  hideKml(id: number) {
+    const ds = this.kml.get(id);
+    if (ds) {
+      this.viewer.dataSources.remove(ds, true);
+      this.kml.delete(id);
+    }
+  }
+
+  hasKml(id: number) {
+    return this.kml.has(id);
+  }
+
+  flyToKml(layer: Layer) {
+    const ds = this.kml.get(layer.id);
+    if (ds) void this.viewer.flyTo(ds, { duration: 1.6 });
+    else if (layer.bounds)
+      this.viewer.camera.flyTo({ destination: Rectangle.fromDegrees(...layer.bounds), duration: 1.6 });
+  }
+
+  // Multi-plot composite -----------------------------------------------------
+  showComposite(c: Composite | null, alpha = 0.75) {
+    if (this.compositeLayer) {
+      this.viewer.imageryLayers.remove(this.compositeLayer, true);
+      this.compositeLayer = null;
+    }
+    if (!c) return;
+    const provider = SingleTileImageryProvider.fromUrl(c.canvas.toDataURL("image/png"), {
+      rectangle: Rectangle.fromDegrees(c.west, c.south, c.east, c.north),
+    });
+    this.compositeLayer = ImageryLayer.fromProviderAsync(provider, { alpha });
+    this.viewer.imageryLayers.add(this.compositeLayer);
+  }
+
+  setCompositeAlpha(alpha: number) {
+    if (this.compositeLayer) this.compositeLayer.alpha = alpha;
   }
 
   setExaggeration(v: number) {
@@ -144,6 +232,11 @@ export class Globe {
   cancelPick() {
     this.pickHandler = null;
     document.body.classList.remove("picking");
+  }
+
+  /** Screen position (CSS px) of a lat/lon, for tooltips. */
+  toScreen(lat: number, lon: number): Cartesian2 | undefined {
+    return this.viewer.scene.cartesianToCanvasCoordinates(Cartesian3.fromDegrees(lon, lat));
   }
 
   // Stations -------------------------------------------------------------
@@ -236,6 +329,10 @@ export class Globe {
   setCoverageOpacity(plotId: number, alpha: number) {
     const layer = this.coverage.get(plotId);
     if (layer) layer.alpha = alpha;
+  }
+
+  flyToBounds(west: number, south: number, east: number, north: number) {
+    this.viewer.camera.flyTo({ destination: Rectangle.fromDegrees(west, south, east, north), duration: 1.6 });
   }
 
   flyToRun(run: RunSummary) {

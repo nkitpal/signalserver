@@ -1,6 +1,8 @@
 // Tiny DOM helpers (no framework).
 
-type Attrs = Record<string, string | number | boolean | EventListener | undefined | null>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Handler = (e: any) => unknown;
+type Attrs = Record<string, string | number | boolean | Handler | undefined | null>;
 type Child = Node | string | number | null | undefined | false;
 
 export function h<K extends keyof HTMLElementTagNameMap>(

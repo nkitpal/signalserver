@@ -46,8 +46,10 @@ def run_summary(run: PlotRun, detail: bool = False) -> RunSummary:
         west=run.west, created_at=run.created_at, finished_at=run.finished_at,
         files=run.files or [], legend=run.legend or [],
         image_url=f"/api/runs/{run.id}/files/coverage.png" if "coverage.png" in (run.files or []) else None,
+        values_url=f"/api/runs/{run.id}/files/values.png" if "values.png" in (run.files or []) else None,
+        value_top=run.value_top, value_step=run.value_step,
         opacity=p.get("opacity", 0.7),
-        units="dBm" if p.get("use_dbm") else ("dB" if p.get("erp_watts", 1) <= 0 else "dBuV/m"),
+        units=run.value_unit or ("dBm" if p.get("use_dbm") else ("dB" if p.get("erp_watts", 1) <= 0 else "dBuV/m")),
     )
     if detail:
         return RunDetail(**data, params=p, command=[str(c) for c in run.command or []],
@@ -135,3 +137,31 @@ def get_job(job_id: int, db: Session = Depends(get_db)):
     out = JobOut.model_validate(job)
     out.status = job.status.value
     return out
+
+
+@router.get("/analysis/point")
+def point_values(lat: float, lon: float, run_ids: str, db: Session = Depends(get_db),
+                 settings: Settings = Depends(get_settings)):
+    """Values of several runs at one point, strongest first (``run_ids=1,2,3``)."""
+    import rasterio
+
+    try:
+        ids = [int(x) for x in run_ids.split(",") if x.strip()][:50]
+    except ValueError as exc:
+        raise HTTPException(422, "run_ids must be comma-separated integers") from exc
+    out = []
+    for rid in ids:
+        run = db.get(PlotRun, rid)
+        if run is None or "values.tif" not in (run.files or []):
+            continue
+        with rasterio.open(settings.runs_dir / str(rid) / "values.tif") as src:
+            row, col = src.index(lon, lat)
+            value = None
+            if 0 <= row < src.height and 0 <= col < src.width:
+                v = int(src.read(1, window=((row, row + 1), (col, col + 1)))[0, 0])
+                value = None if v == src.nodata else v
+        out.append({"run_id": rid, "plot_id": run.plot_id, "plot_name": (run.params or {}).get("name"),
+                    "value": value, "unit": run.value_unit})
+    loss = any(o["unit"] == "dB" for o in out)
+    out.sort(key=lambda o: (o["value"] is None, o["value"] if loss else -(o["value"] or 0)))
+    return {"latitude": lat, "longitude": lon, "values": out}

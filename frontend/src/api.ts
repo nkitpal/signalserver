@@ -1,7 +1,59 @@
 // Typed client for the Signal Server GUI REST API.
 
+export interface Project {
+  id: number;
+  name: string;
+  description: string;
+}
+
+export interface Folder {
+  id: number;
+  project_id: number;
+  parent_id: number | null;
+  name: string;
+  position: number;
+}
+
+export interface Layer {
+  id: number;
+  project_id: number;
+  folder_id: number | null;
+  name: string;
+  kind: string;
+  feature_count: number;
+  url: string;
+  bounds: [number, number, number, number] | null;
+}
+
+export interface ProjectTree {
+  project: Project;
+  folders: Folder[];
+  stations: Station[];
+  plots: Plot[];
+  layers: Layer[];
+}
+
+export interface BasemapPack {
+  id: number;
+  name: string;
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+  max_zoom: number;
+  tile_count: number;
+  size_bytes: number;
+  ready: boolean;
+  url: string;
+  job: { id: number; status: string; stage: string; progress: number; error: string | null } | null;
+}
+
+export type ElevationModel = "dem3" | "cop30" | "cop30_buildings";
+
 export interface Station {
   id: number;
+  project_id: number;
+  folder_id: number | null;
   name: string;
   latitude: number;
   longitude: number;
@@ -12,7 +64,7 @@ export interface Station {
   downtilt_direction_deg: number;
   notes: string;
 }
-export type StationInput = Omit<Station, "id">;
+export type StationInput = Omit<Station, "id" | "project_id"> & { project_id: number | null };
 
 export interface Antenna {
   id: number;
@@ -45,6 +97,9 @@ export interface RunSummary {
   files: string[];
   legend: LegendEntry[];
   image_url: string | null;
+  values_url: string | null;
+  value_top: number | null;
+  value_step: number | null;
   opacity: number;
   units: string;
 }
@@ -76,14 +131,17 @@ export interface RunDetail extends RunSummary {
 
 export interface Plot {
   id: number;
+  project_id: number;
+  folder_id: number | null;
   name: string;
+  elevation_model: ElevationModel;
   antenna_id: number;
   tx_station_id: number;
   rx_station_id: number | null;
   frequency_mhz: number;
   erp_watts: number;
   radius_km: number;
-  resolution: 300 | 600 | 1200;
+  resolution: 300 | 600 | 1200 | 3600;
   rx_height_m: number;
   rx_threshold: number | null;
   propagation_model: number;
@@ -103,7 +161,7 @@ export interface Plot {
   opacity: number;
   latest_run: RunSummary | null;
 }
-export type PlotInput = Omit<Plot, "id" | "latest_run">;
+export type PlotInput = Omit<Plot, "id" | "latest_run" | "project_id"> & { project_id: number | null };
 
 export interface Job {
   id: number;
@@ -122,6 +180,7 @@ export interface ViewerConfig {
   cesium_ion_token: string;
   imagery: { id: string; name: string; url: string; credit: string }[];
   palettes: string[];
+  elevation_models: Record<ElevationModel, string>;
   propagation_models: Record<string, string>;
 }
 
@@ -160,14 +219,49 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const api = {
   config: () => request<ViewerConfig>("GET", "/api/config"),
-  stations: () => request<Station[]>("GET", "/api/stations"),
+  projects: () => request<Project[]>("GET", "/api/projects"),
+  createProject: (p: { name: string; description?: string }) => request<Project>("POST", "/api/projects", p),
+  updateProject: (id: number, p: { name: string; description: string }) =>
+    request<Project>("PUT", `/api/projects/${id}`, p),
+  deleteProject: (id: number) => request<void>("DELETE", `/api/projects/${id}`),
+  tree: (id: number) => request<ProjectTree>("GET", `/api/projects/${id}/tree`),
+  createFolder: (projectId: number, f: { name: string; parent_id: number | null }) =>
+    request<Folder>("POST", `/api/projects/${projectId}/folders`, f),
+  updateFolder: (id: number, f: { name: string; parent_id: number | null; position: number }) =>
+    request<Folder>("PUT", `/api/folders/${id}`, f),
+  deleteFolder: (id: number) => request<void>("DELETE", `/api/folders/${id}`),
+  move: (kind: "stations" | "plots" | "layers", id: number, folderId: number | null) =>
+    request<void>("PATCH", `/api/${kind}/${id}/move`, { folder_id: folderId }),
+  importLayer: (projectId: number, form: FormData) =>
+    request<{ layer: Layer; stations_created: string[]; stations_skipped: string[]; points: number }>(
+      "POST",
+      `/api/projects/${projectId}/layers`,
+      form,
+    ),
+  deleteLayer: (id: number) => request<void>("DELETE", `/api/layers/${id}`),
+  profile: (path: [number, number][], samples = 300) =>
+    request<{ distance_m: number; points: [number, number, number, number][] }>(
+      "GET",
+      `/api/elevation/profile?samples=${samples}&path=${encodeURIComponent(path.map((p) => p.join(",")).join(";"))}`,
+    ),
+  basemaps: () => request<BasemapPack[]>("GET", "/api/basemaps"),
+  estimatePack: (b: { west: number; south: number; east: number; north: number }, maxZoom: number) =>
+    request<{ tiles: number; approx_mb: number; limit: number; ok: boolean }>(
+      "GET",
+      `/api/basemaps/estimate?west=${b.west}&south=${b.south}&east=${b.east}&north=${b.north}&max_zoom=${maxZoom}`,
+    ),
+  createPack: (p: { name: string; west: number; south: number; east: number; north: number; max_zoom: number; with_elevation: boolean }) =>
+    request<BasemapPack>("POST", "/api/basemaps", p),
+  deletePack: (id: number) => request<void>("DELETE", `/api/basemaps/${id}`),
+  stations: (projectId?: number) =>
+    request<Station[]>("GET", `/api/stations${projectId ? `?project_id=${projectId}` : ""}`),
   createStation: (s: StationInput) => request<Station>("POST", "/api/stations", s),
   updateStation: (id: number, s: StationInput) => request<Station>("PUT", `/api/stations/${id}`, s),
   deleteStation: (id: number) => request<void>("DELETE", `/api/stations/${id}`),
   antennas: () => request<Antenna[]>("GET", "/api/antennas"),
   createAntenna: (form: FormData) => request<Antenna>("POST", "/api/antennas", form),
   deleteAntenna: (id: number) => request<void>("DELETE", `/api/antennas/${id}`),
-  plots: () => request<Plot[]>("GET", "/api/plots"),
+  plots: (projectId?: number) => request<Plot[]>("GET", `/api/plots${projectId ? `?project_id=${projectId}` : ""}`),
   createPlot: (p: PlotInput) => request<Plot>("POST", "/api/plots", p),
   updatePlot: (id: number, p: PlotInput) => request<Plot>("PUT", `/api/plots/${id}`, p),
   deletePlot: (id: number) => request<void>("DELETE", `/api/plots/${id}`),
@@ -177,13 +271,17 @@ export const api = {
   deleteRun: (id: number) => request<void>("DELETE", `/api/runs/${id}`),
   job: (id: number) => request<Job>("GET", `/api/jobs/${id}`),
   elevationSummary: () =>
-    request<{ tiles: number; tiles_with_data: number; archives: number; source: string }>(
-      "GET",
-      "/api/elevation/summary",
-    ),
-  elevationTiles: () => request<GeoJSON>("GET", "/api/elevation/tiles.geojson"),
-  prefetch: (bbox: { west: number; south: number; east: number; north: number }) =>
-    request<Job>("POST", "/api/elevation/prefetch", bbox),
+    request<{
+      tiles: number;
+      tiles_with_data: number;
+      archives: number;
+      source: string;
+      models: Record<ElevationModel, { description: string; tiles: number; tiles_with_data: number; buildings: number }>;
+    }>("GET", "/api/elevation/summary"),
+  elevationTiles: (model: ElevationModel = "dem3") =>
+    request<GeoJSON>("GET", `/api/elevation/tiles.geojson?model=${model}`),
+  prefetch: (bbox: { west: number; south: number; east: number; north: number }, model: ElevationModel = "dem3") =>
+    request<Job>("POST", "/api/elevation/prefetch", { ...bbox, model }),
   height: (lat: number, lon: number) =>
     request<{ height_m: number }>("GET", `/api/elevation/height?lat=${lat}&lon=${lon}`),
 };

@@ -1,55 +1,93 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
-test("create a station on the globe, create a plot and run it", async ({ page, request }) => {
+/** Answer the next browser prompt/confirm dialogs in order. */
+function answerDialogs(page: Page, answers: (string | boolean)[]) {
+  const queue = [...answers];
+  const handler = async (d: import("@playwright/test").Dialog) => {
+    const a = queue.shift();
+    if (a === false) await d.dismiss();
+    else await d.accept(typeof a === "string" ? a : undefined);
+    if (!queue.length) page.off("dialog", handler);
+  };
+  page.on("dialog", handler);
+}
+
+const KML = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>E2E survey</name>
+<Placemark><name>Survey A</name><Point><coordinates>9.08,47.12,0</coordinates></Point></Placemark>
+<Placemark><name>Route</name><LineString><coordinates>9.03,47.08 9.08,47.12</coordinates></LineString></Placemark>
+</Document></kml>`;
+
+test("project → folder → station → plot → run, compare, measure, import KML", async ({ page, request }) => {
   const suffix = Date.now().toString(36);
-  const stationName = `E2E Hill ${suffix}`;
-  const plotName = `E2E-plot-${suffix}`;
-
+  const project = `E2E ${suffix}`;
   await page.goto("/");
-  await expect(page.getByRole("tab", { name: "Plots" })).toBeVisible();
   await page.waitForFunction(() => document.querySelector("#globe canvas") !== null);
 
-  // Station: fly near the Alps, pick the location on the globe, then refine coordinates.
-  await page.getByRole("tab", { name: "Stations" }).click();
-  await page.getByRole("button", { name: "+ New station" }).click();
-  await page.getByLabel("Name").fill(stationName);
+  // Project and folder (names come from prompts).
+  answerDialogs(page, [project]);
+  await page.getByRole("button", { name: "+ Project" }).click();
+  await expect(page.locator(".project-select")).toHaveValue(/\d+/);
+  await expect(page.locator(".project-select option:checked")).toHaveText(project);
+  answerDialogs(page, ["Sites"]);
+  await page.getByRole("button", { name: "+ Folder" }).click();
+  await expect(page.locator(".tree .row.selected", { hasText: "Sites" })).toBeVisible();
+
+  // Station: pick on the globe, then refine the coordinates.
+  await page.getByRole("button", { name: "+ Station" }).click();
+  await page.getByLabel("Name").fill("Hill");
   await page.getByRole("button", { name: /Pick on globe/ }).click();
-  const canvas = page.locator("#globe canvas");
-  const box = (await canvas.boundingBox())!;
+  const box = (await page.locator("#globe canvas").boundingBox())!;
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await expect(page.locator('input[name="latitude"]')).not.toHaveValue("");
   await page.locator('input[name="latitude"]').fill("47.10");
   await page.locator('input[name="longitude"]').fill("9.05");
   await page.locator('input[name="height_m"]').fill("25");
   await page.getByRole("button", { name: "Create station" }).click();
-  await expect(page.locator(".card h3", { hasText: stationName })).toBeVisible();
+  await expect(page.locator(".tree .row", { hasText: "Hill" })).toBeVisible();
 
-  // Plot
-  await page.getByRole("tab", { name: "Plots" }).click();
-  await page.getByRole("button", { name: "+ New plot" }).click();
-  await page.getByLabel("Name").fill(plotName);
-  await page.locator('select[name="tx_station_id"]').selectOption({ label: stationName });
+  // Plot in the same folder, run it.
+  await page.getByRole("button", { name: "+ Plot", exact: true }).click();
+  await page.getByLabel("Name").fill("Hill-UHF");
   await page.locator('input[name="radius_km"]').fill("8");
   await page.locator('select[name="resolution"]').selectOption("600");
-  page.once("dialog", (d) => d.accept()); // "Run it now?"
+  answerDialogs(page, [true]); // "Run it now?"
   await page.getByRole("button", { name: "Create plot" }).click();
-
-  const card = page.locator("article.card", { hasText: plotName });
-  await expect(card.locator(".badge")).toHaveText(/ready/i, { timeout: 150_000 });
-  await expect(card.getByRole("link", { name: "Google Earth KMZ" })).toBeVisible();
+  const row = page.locator(".tree .row", { hasText: "Hill-UHF" });
+  await expect(row.locator(".badge")).toHaveText(/ready/i, { timeout: 150_000 });
+  await row.click();
+  const kmz = await page.locator(".details").getByRole("link", { name: "KMZ" }).getAttribute("href");
+  const res = await request.get(kmz!);
+  expect((await res.body()).subarray(0, 2).toString()).toBe("PK");
   await expect(page.locator("#legend")).toBeVisible();
 
-  const kmz = await card.getByRole("link", { name: "Google Earth KMZ" }).getAttribute("href");
-  const res = await request.get(kmz!);
-  expect(res.ok()).toBeTruthy();
-  expect((await res.body()).subarray(0, 2).toString()).toBe("PK");
+  // Compare: best server legend lists the plot.
+  await page.getByRole("tab", { name: "Analyze" }).click();
+  await page.getByRole("radio", { name: "Best server" }).click();
+  await expect(page.locator("#legend")).toContainText("Hill-UHF");
+  await page.getByRole("radio", { name: "Individual layers" }).click();
 
-  // Clean up through the UI.
-  page.once("dialog", (d) => d.accept());
-  await card.getByRole("button", { name: "Delete" }).click();
-  await expect(card).toHaveCount(0);
-  await page.getByRole("tab", { name: "Stations" }).click();
-  page.once("dialog", (d) => d.accept());
-  await page.locator("article.card", { hasText: stationName }).getByRole("button", { name: "Delete" }).click();
-  await expect(page.locator(".card h3", { hasText: stationName })).toHaveCount(0);
+  // Measure a distance.
+  await page.locator('[data-tool="distance"]').click();
+  await page.mouse.click(box.x + box.width * 0.45, box.y + box.height * 0.5);
+  await page.mouse.click(box.x + box.width * 0.55, box.y + box.height * 0.5);
+  await page.mouse.dblclick(box.x + box.width * 0.55, box.y + box.height * 0.5);
+  await expect(page.locator("#measure")).toContainText(/\d+(\.\d+)? (m|km)/);
+  await page.locator('[data-tool="distance"]').click();
+
+  // Import a KML into the folder and create a station from its point.
+  await page.getByRole("tab", { name: "Explorer" }).click();
+  await page.locator(".tree .row", { hasText: "Sites" }).click();
+  await page.getByRole("button", { name: "Import KML" }).click();
+  await page.locator('input[name="file"]').setInputFiles({ name: "survey.kml", mimeType: "application/xml", buffer: Buffer.from(KML) });
+  await page.getByLabel(/create stations/i).check();
+  await page.getByRole("button", { name: "Import", exact: true }).click();
+  await expect(page.locator(".tree .row", { hasText: "E2E survey" })).toBeVisible();
+  await expect(page.locator(".tree .row", { hasText: "Survey A" })).toBeVisible();
+
+  // Clean up: delete the project.
+  answerDialogs(page, [true]);
+  await page.locator(".project-bar .icon-btn").click();
+  await page.getByRole("menuitem", { name: "Delete project" }).click();
+  await expect(page.locator(".project-select option", { hasText: project })).toHaveCount(0);
 });
