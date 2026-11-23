@@ -47,13 +47,26 @@ def seed() -> None:
     bundled = install_bundled(s.antenna_dir, s.color_dir)
     names = {"dipole": "Generic Dipole", "yagi": "Generic Yagi", "cardio": "Generic Cardioid",
              "ellipse": "Generic Ellipse", "corner": "Generic Corner Reflector"}
+    from .api.antennas import _apply
+    from .engine.antennas import PatternError, parse_any
+
+    gains = {"dipole": 2.15}  # the only bundled pattern with a known gain
     with session_scope() as db:
-        existing = {(a.category, a.pattern) for a in db.scalars(select(Antenna))}
+        existing = {(a.category, a.pattern): a for a in db.scalars(select(Antenna))}
         for category, pattern in bundled:
-            if (category, pattern) in existing:
-                continue
-            db.add(Antenna(name=names.get(pattern, pattern), category=category, pattern=pattern,
-                           description="Bundled pattern"))
+            antenna = existing.get((category, pattern))
+            if antenna is None:
+                antenna = Antenna(name=names.get(pattern, pattern), category=category, pattern=pattern,
+                                  description="Bundled pattern", gain_dbi=gains.get(pattern))
+                db.add(antenna)
+            if antenna.gain_dbi is None and pattern in gains:
+                antenna.gain_dbi = gains[pattern]
+            if antenna.pattern_data is None:  # fill metadata for bundled antennas (also after upgrades)
+                src = s.antenna_dir / category / f"{pattern}.ant"
+                try:
+                    _apply(antenna, parse_any(src.read_bytes(), src.name))
+                except (OSError, PatternError):
+                    pass
     print(f"Bundled antennas available: {len(bundled)}")
 
 

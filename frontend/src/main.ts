@@ -7,6 +7,7 @@ import {
   type ElevationModel,
   type Folder,
   type Layer,
+  type PatternData,
   type Plot,
   type PlotInput,
   type Project,
@@ -18,6 +19,7 @@ import {
 import { OVERLAP_COLORS, PLOT_COLORS, composite, loadValues, valueAt, higherIsBetter, type CompositeMode, type ValueGrid } from "./analysis";
 import { chartLegend, profileChart, terrainChart } from "./chart";
 import { checkbox, clear, field, formValues, h, num, optNum, select, text, toast } from "./dom";
+import { polarChart } from "./polar";
 import { Globe } from "./globe";
 import { MeasureTool, formatArea, formatDistance, type MeasureMode, type MeasureResult } from "./measure";
 import { renderTree, type NodeKind, type Selection } from "./tree";
@@ -776,6 +778,51 @@ function folderOptions(): [string | number, string][] {
   return out;
 }
 
+/** Antenna picker + power entry: ERP directly, or transmitter power + antenna gain - cable loss. */
+function powerSection(v: Partial<Plot>) {
+  const antenna = select("antenna_id", state.antennas.map((a) =>
+    [a.id, `${a.name}${a.gain_dbi != null ? ` · ${a.gain_dbi} dBi` : ""}`]), v.antenna_id) as HTMLSelectElement;
+  const mode = select("power_mode", [["erp", "Enter ERP"], ["tx", "Transmitter power + antenna gain"]],
+    v.tx_power_w != null ? "tx" : "erp") as HTMLSelectElement;
+  const erpIn = num("erp_watts", v.erp_watts, { min: 0 });
+  const txIn = num("tx_power_w", v.tx_power_w ?? 10, { min: 0 });
+  const lossIn = num("cable_loss_db", v.cable_loss_db ?? 0, { min: 0, max: 60, step: 0.1 });
+  const out = h("p", { class: "meta erp-out" });
+  const gain = () => state.antennas.find((a) => a.id === Number(antenna.value))?.gain_dbi ?? null;
+  const computed = () => {
+    const g = gain();
+    return g == null ? null : Number(txIn.value || 0) * 10 ** ((g - 2.15 - Number(lossIn.value || 0)) / 10);
+  };
+  const erpRow = field("ERP (W)", erpIn, "Effective radiated power, dipole-referenced, including antenna gain");
+  const txRow = h("div", { class: "grid2" },
+    field("Transmitter power (W)", txIn),
+    field("Cable & connector loss (dB)", lossIn));
+  const update = () => {
+    const tx = mode.value === "tx";
+    erpRow.hidden = tx;
+    txRow.hidden = !tx;
+    out.hidden = !tx;
+    erpIn.required = !tx;
+    if (!tx) return;
+    const g = gain();
+    const e = computed();
+    const dbm = 10 * Math.log10(Number(txIn.value || 0) * 1000);
+    out.textContent = g == null
+      ? "This antenna has no gain set. Set it in Data → Antennas, or enter the ERP directly."
+      : `${Number(txIn.value || 0)} W (${dbm.toFixed(1)} dBm) + ${g} dBi − 2.15 − ${Number(lossIn.value || 0)} dB loss → ERP ${e!.toFixed(2)} W (${(10 * Math.log10(e! * 1000)).toFixed(1)} dBm)`;
+    out.classList.toggle("warn", g == null);
+  };
+  for (const el of [mode, antenna, txIn, lossIn]) el.addEventListener("input", update);
+  update();
+  return {
+    antennaField: field("Antenna", antenna, "Manage patterns in Data → Antennas"),
+    el: h("div", { class: "power" }, field("Power", mode), erpRow, txRow, out),
+    erp: () => (mode.value === "tx" ? computed() ?? Number(erpIn.value || 0) : Number(erpIn.value)),
+    txPower: () => (mode.value === "tx" ? Number(txIn.value) : null),
+    loss: () => Number(lossIn.value || 0),
+  };
+}
+
 function openPlotForm(p: Plot | null, folderId: number | null, txId?: number) {
   const c = state.config;
   const tree = state.tree!;
@@ -795,6 +842,7 @@ function openPlotForm(p: Plot | null, folderId: number | null, txId?: number) {
   };
   model.addEventListener("change", syncRes);
   syncRes();
+  const power = powerSection(v);
   const form = h("form", { class: "form" },
     h("div", { class: "grid2" },
       field("Name", text("name", v.name ?? "", { required: true, placeholder: "e.g. Hilltop-UHF" })),
@@ -804,12 +852,12 @@ function openPlotForm(p: Plot | null, folderId: number | null, txId?: number) {
       field("Transmitter station", select("tx_station_id", stations, v.tx_station_id)),
       field("Receiver station (optional)", select("rx_station_id", [["", "— none —"], ...stations], v.rx_station_id)),
     ),
-    field("Antenna", select("antenna_id", state.antennas.map((a) => [a.id, `${a.name} (${a.category})`]), v.antenna_id)),
-    h("div", { class: "grid3" },
+    power.antennaField,
+    h("div", { class: "grid2" },
       field("Frequency (MHz)", num("frequency_mhz", v.frequency_mhz, { min: 20, max: 100000, required: true })),
-      field("ERP (W)", num("erp_watts", v.erp_watts, { min: 0, required: true })),
       field("Radius (km)", num("radius_km", v.radius_km, { min: 0.1, max: 300, required: true })),
     ),
+    power.el,
     h("div", { class: "grid3" },
       field("Elevation model", model),
       field("Resolution", resolution),
@@ -855,7 +903,9 @@ function openPlotForm(p: Plot | null, folderId: number | null, txId?: number) {
       tx_station_id: Number(f.tx_station_id),
       rx_station_id: optNum(f.rx_station_id),
       frequency_mhz: Number(f.frequency_mhz),
-      erp_watts: Number(f.erp_watts),
+      erp_watts: power.erp(),
+      tx_power_w: power.txPower(),
+      cable_loss_db: power.loss(),
       radius_km: Number(f.radius_km),
       resolution: Number(f.resolution) as PlotInput["resolution"],
       elevation_model: f.elevation_model as ElevationModel,
@@ -1198,43 +1248,205 @@ function trackJob(id: number, line: HTMLElement, doneMsg: string) {
 }
 
 function antennasView() {
+  const fmtNames: Record<string, string> = {
+    msi: "MSI/Planet", adf: "NSMA ADF", radiomobile_v1: "Radio Mobile V1", radiomobile_v2: "Radio Mobile V2",
+    radiomobile_v3: "Radio Mobile V3", generated_omni: "Generated omni", generated_sector: "Generated sector",
+  };
+  return h("div", {},
+    h("div", { class: "panel-head" }, h("h2", {}, "Antennas"),
+      h("div", { class: "actions tight" },
+        h("button", { class: "primary small", onclick: openAntennaImport }, "Import pattern"),
+        h("button", { class: "small", onclick: openAntennaGenerator }, "Generate"))),
+    h("article", { class: "card" },
+      state.antennas.map((a) =>
+        h("div", { class: "pack-row antenna-row", onclick: () => openAntennaDetails(a) },
+          h("div", {},
+            h("b", {}, a.name),
+            h("div", { class: "meta" }, [
+              a.gain_dbi != null ? `${a.gain_dbi} dBi` : "gain not set",
+              a.h_beamwidth != null ? `H ${a.h_beamwidth}°` : null,
+              a.v_beamwidth != null ? `V ${a.v_beamwidth}°` : null,
+              a.electrical_tilt ? `tilt ${a.electrical_tilt}°` : null,
+              fmtNames[a.source_format] ?? (a.source_format || a.category),
+            ].filter(Boolean).join(" · "))),
+          h("button", { class: "small", onclick: (e: Event) => { e.stopPropagation(); openAntennaDetails(a); } }, "View"),
+        ),
+      ),
+      h("p", { class: "meta" }, "Imports MSI/Planet (.msi, .pln, .txt), NSMA (.adf) and Radio Mobile (.ant) files from manufacturers, CloudRF or Ubiquiti, or generates omni/sector patterns."),
+    ),
+  );
+}
+
+async function refreshAntennas() {
+  state.antennas = await api.antennas();
+  render();
+}
+
+function patternView(p: PatternData) {
+  const tilt = p.electrical_tilt ?? p.peak_tilt;
+  return h("div", { class: "pattern-view" },
+    h("div", { class: "polars" },
+      polarChart(p.horizontal, "horizontal", 220, "Horizontal (top view)"),
+      polarChart(p.vertical, "vertical", 220, "Vertical (side view)")),
+    h("dl", { class: "kv" }, [
+      ["Gain", p.gain_dbi != null ? `${p.gain_dbi} dBi (${(p.gain_dbi - 2.15).toFixed(2)} dBd)` : "not in file"],
+      ["Beamwidth", `H ${p.h_beamwidth ?? "?"}° · V ${p.v_beamwidth ?? "?"}°`],
+      ["Front-to-back", p.front_to_back != null ? `${p.front_to_back} dB` : "?"],
+      ["Downtilt", tilt != null ? `${tilt}°` : "?"],
+      ["Format", p.source_format || "?"],
+    ].flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])),
+    ...(p.warnings ?? []).map((w) => h("p", { class: "meta warn" }, `⚠ ${w}`)),
+    p.vertical_complete === false && !(p.warnings ?? []).length
+      ? h("p", { class: "meta" }, "Only part of the vertical cut is known; the rest is filled in.") : null,
+  );
+}
+
+async function openAntennaDetails(a: Antenna) {
+  const body = h("div", {}, h("p", { class: "meta" }, "Loading pattern…"));
+  openDialog(a.name, body);
+  try {
+    const p = await api.antennaPattern(a.id);
+    clear(body);
+    const gainIn = num("gain_dbi", a.gain_dbi, { step: 0.01, placeholder: "unknown" });
+    body.append(patternView(p));
+    if (a.manufacturer)
+      body.append(h("p", { class: "meta" }, `Manufacturer: ${a.manufacturer}${a.frequency_mhz ? ` · ${a.frequency_mhz} MHz` : ""}`));
+    body.append(
+      h("form", { class: "row", onsubmit: async (e: Event) => {
+        e.preventDefault();
+        try {
+          await api.updateAntenna(a.id, { gain_dbi: optNum(gainIn.value) });
+          toast("Gain saved", "ok");
+          await refreshAntennas();
+        } catch (err) { toast((err as Error).message, "error"); }
+      } }, field("Gain (dBi)", gainIn, "Used to compute ERP from transmitter power"), h("button", { type: "submit" }, "Save gain")),
+      h("div", { class: "actions" },
+        h("button", { class: "danger", onclick: async () => {
+          if (!confirm(`Delete antenna “${a.name}”?`)) return;
+          try { await api.deleteAntenna(a.id); closeDialog(); await refreshAntennas(); }
+          catch (e) { toast((e as Error).message, "error"); }
+        } }, "Delete"),
+        h("button", { onclick: closeDialog }, "Close")),
+    );
+  } catch (e) {
+    body.textContent = (e as Error).message;
+  }
+}
+
+function openAntennaImport() {
+  const fileIn = h("input", { type: "file", name: "file", accept: ".msi,.pln,.txt,.adf,.ant", required: true });
+  const flip = h("input", { type: "checkbox", name: "flip_vertical" });
+  const name = text("name", "");
+  const manufacturer = text("manufacturer", "");
+  const gain = num("gain_dbi", null, { step: 0.01, placeholder: "from file" });
+  const preview = h("div", { class: "preview" }, h("p", { class: "meta" }, "Choose a file to preview its pattern."));
+  const doPreview = async () => {
+    const file = fileIn.files?.[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("flip_vertical", String(flip.checked));
+    try {
+      const p = await api.previewAntenna(fd);
+      clear(preview);
+      preview.append(patternView(p));
+      if (!name.value) name.value = p.name ?? "";
+      if (!manufacturer.value) manufacturer.value = p.manufacturer ?? "";
+      gain.placeholder = p.gain_dbi != null ? `${p.gain_dbi} (from file)` : "not in file: enter it";
+    } catch (e) {
+      clear(preview);
+      preview.append(h("p", { class: "meta warn" }, (e as Error).message));
+    }
+  };
+  fileIn.addEventListener("change", doPreview);
+  flip.addEventListener("change", doPreview);
   const form = h("form", { class: "form" },
-    h("div", { class: "grid2" },
-      field("Name", text("name", "", { required: true })),
+    field("Pattern file", fileIn, "MSI/Planet (.msi .pln .txt), NSMA (.adf) or Radio Mobile (.ant)"),
+    preview,
+    h("label", { class: "check" }, flip, h("span", {}, "Flip vertical pattern (if up and down look swapped compared with the datasheet)")),
+    h("div", { class: "grid2" }, field("Name", name), field("Manufacturer", manufacturer)),
+    h("div", { class: "grid3" },
+      field("Gain (dBi)", gain),
       field("Category", text("category", "custom")),
-    ),
-    h("div", { class: "grid2" },
-      field("Rx gain (dBd)", num("rx_gain_dbd", 0)),
-      field(".ant file", h("input", { type: "file", name: "file", accept: ".ant", required: true })),
-    ),
-    h("button", { class: "primary", type: "submit" }, "Upload antenna"),
+      field("Rx gain (dBd)", num("rx_gain_dbd", 0), "For path analysis")),
+    h("div", { class: "actions" },
+      h("button", { class: "primary", type: "submit" }, "Save antenna"),
+      h("button", { type: "button", onclick: closeDialog }, "Cancel")),
   );
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    const fd = new FormData(form);
+    fd.set("flip_vertical", String(flip.checked));
+    if (!gain.value) fd.delete("gain_dbi");
     try {
-      await api.createAntenna(new FormData(form));
-      toast("Antenna added", "ok");
-      state.antennas = await api.antennas();
-      render();
+      const a = await api.createAntenna(fd);
+      closeDialog();
+      toast(`Antenna “${a.name}” added`, "ok");
+      await refreshAntennas();
     } catch (e) {
       toast((e as Error).message, "error");
     }
   });
-  return h("div", {},
-    h("div", { class: "panel-head" }, h("h2", {}, "Antennas")),
-    h("article", { class: "card" },
-      state.antennas.map((a) =>
-        h("div", { class: "pack-row" },
-          h("div", {}, h("b", {}, a.name), h("div", { class: "meta" }, `${a.category}/${a.pattern} · Rx gain ${a.rx_gain_dbd} dBd`)),
-          h("button", { class: "danger small", onclick: async () => {
-            if (!confirm(`Delete antenna “${a.name}”?`)) return;
-            try { await api.deleteAntenna(a.id); state.antennas = await api.antennas(); render(); } catch (e) { toast((e as Error).message, "error"); }
-          } }, "Delete"),
-        ),
-      ),
-      form,
-    ),
+  openDialog("Import antenna pattern", form);
+}
+
+function openAntennaGenerator() {
+  const kind = select("kind", [["sector", "Sector (panel)"], ["omni", "Omnidirectional"]], "sector") as HTMLSelectElement;
+  const hbw = num("h_beamwidth", 65, { min: 1, max: 360 });
+  const vbw = num("v_beamwidth", 10, { min: 1, max: 180 });
+  const tilt = num("electrical_tilt", 0, { min: -30, max: 30, step: 0.5 });
+  const ftb = num("front_to_back", 25, { min: 0, max: 60 });
+  const gain = num("gain_dbi", null, { step: 0.1, placeholder: "estimate" });
+  const name = text("name", "");
+  const preview = h("div", { class: "preview" });
+  const values = () => ({
+    kind: kind.value as "omni" | "sector", h_beamwidth: Number(hbw.value || 65), v_beamwidth: Number(vbw.value || 10),
+    electrical_tilt: Number(tilt.value || 0), front_to_back: Number(ftb.value || 0), gain_dbi: optNum(gain.value),
+    name: name.value, category: "generated",
+  });
+  let timer = 0;
+  const doPreview = () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(async () => {
+      hbw.disabled = kind.value === "omni";
+      ftb.disabled = kind.value === "omni";
+      try {
+        const p = await api.generateAntenna(values(), true);
+        clear(preview);
+        preview.append(patternView(p));
+        gain.placeholder = `${p.gain_dbi} (estimate)`;
+      } catch (e) {
+        clear(preview);
+        preview.append(h("p", { class: "meta warn" }, (e as Error).message));
+      }
+    }, 200);
+  };
+  for (const el of [kind, hbw, vbw, tilt, ftb, gain]) el.addEventListener("input", doPreview);
+  const form = h("form", { class: "form" },
+    h("div", { class: "grid3" },
+      field("Type", kind), field("Horizontal beamwidth (°)", hbw), field("Vertical beamwidth (°)", vbw)),
+    h("div", { class: "grid3" },
+      field("Electrical downtilt (°)", tilt), field("Front-to-back (dB)", ftb), field("Gain (dBi)", gain)),
+    preview,
+    field("Name", name, "Leave empty for an automatic name"),
+    h("p", { class: "meta" }, "3GPP-style pattern: parabolic main lobe, side lobes capped at 20 dB. Gain is estimated from the beamwidths unless you enter it."),
+    h("div", { class: "actions" },
+      h("button", { class: "primary", type: "submit" }, "Save antenna"),
+      h("button", { type: "button", onclick: closeDialog }, "Cancel")),
   );
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try {
+      const a = await api.generateAntenna(values(), false);
+      closeDialog();
+      toast(`Antenna “${a.name}” added`, "ok");
+      await refreshAntennas();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  });
+  openDialog("Generate antenna pattern", form);
+  doPreview();
 }
 
 // ---------------------------------------------------------------- measuring

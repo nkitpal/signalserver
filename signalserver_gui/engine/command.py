@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..models import Plot
+from .antennas import erp_watts
 
 M_TO_FT = 3.28084
 KM_TO_MI = 0.621371
@@ -23,7 +24,9 @@ def plot_params(plot: Plot) -> dict:
         "plot_id": plot.id,
         "name": plot.name,
         "frequency_mhz": plot.frequency_mhz,
-        "erp_watts": plot.erp_watts,
+        "erp_watts": _erp(plot),
+        "tx_power_w": plot.tx_power_w,
+        "cable_loss_db": plot.cable_loss_db,
         "radius_km": plot.radius_km,
         "resolution": plot.resolution,
         "elevation_model": plot.elevation_model,
@@ -49,11 +52,19 @@ def plot_params(plot: Plot) -> dict:
             "category": plot.antenna.category,
             "pattern": plot.antenna.pattern,
             "rx_gain_dbd": plot.antenna.rx_gain_dbd,
+            "gain_dbi": plot.antenna.gain_dbi,
         },
         "tx": _station(tx),
         "rx": _station(rx) if rx is not None else None,
     }
     return snap
+
+
+def _erp(plot: Plot) -> float:
+    """ERP used for the run: recomputed from tx power with the antenna's current gain."""
+    if plot.tx_power_w is not None and plot.antenna.gain_dbi is not None:
+        return round(erp_watts(plot.tx_power_w, plot.antenna.gain_dbi, plot.cable_loss_db or 0.0), 6)
+    return plot.erp_watts
 
 
 def _station(s) -> dict:

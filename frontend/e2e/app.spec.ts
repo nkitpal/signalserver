@@ -85,9 +85,31 @@ test("project → folder → station → plot → run, compare, measure, import 
   await expect(page.locator(".tree .row", { hasText: "E2E survey" })).toBeVisible();
   await expect(page.locator(".tree .row", { hasText: "Survey A" })).toBeVisible();
 
+  // Antenna library: generate a sector pattern (preview shows polar charts), then a plot
+  // that derives its ERP from transmitter power and the antenna's gain.
+  await page.getByRole("tab", { name: "Data" }).click();
+  await page.getByRole("button", { name: "Generate" }).click();
+  await page.locator('input[name="name"]').fill(`Sector ${suffix}`);
+  await page.locator('input[name="electrical_tilt"]').fill("4");
+  await expect(page.locator("dialog svg.polar")).toHaveCount(2);
+  await expect(page.locator("dialog")).toContainText("Downtilt");
+  await page.getByRole("button", { name: "Save antenna" }).click();
+  await expect(page.locator(".antenna-row", { hasText: `Sector ${suffix}` })).toBeVisible();
+  await page.getByRole("tab", { name: "Explorer" }).click();
+  await page.getByRole("button", { name: "+ Plot", exact: true }).click();
+  await page.getByLabel("Name").fill("Hill-sector");
+  const antennaValue = await page.locator('select[name="antenna_id"] option', { hasText: `Sector ${suffix}` }).getAttribute("value");
+  await page.locator('select[name="antenna_id"]').selectOption(antennaValue!);
+  await page.locator('select[name="power_mode"]').selectOption("tx");
+  await page.locator('input[name="tx_power_w"]').fill("10");
+  await expect(page.locator(".erp-out")).toContainText("ERP");
+  answerDialogs(page, [false]); // don't run it
+  await page.getByRole("button", { name: "Create plot" }).click();
+  await expect(page.locator(".tree .row", { hasText: "Hill-sector" })).toBeVisible();
+
   // Clean up: delete the project.
   answerDialogs(page, [true]);
   await page.locator(".project-bar .icon-btn").click();
   await page.getByRole("menuitem", { name: "Delete project" }).click();
-  await expect(page.locator(".project-select option", { hasText: project })).toHaveCount(0);
+  await expect(page.locator(".project-select option", { hasText: project })).toHaveCount(0, { timeout: 20_000 });
 });

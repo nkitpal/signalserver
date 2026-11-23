@@ -117,6 +117,17 @@ class Antenna(TimestampMixin, Base):
     pattern: Mapped[str] = mapped_column(String(120))  # file base name under antennas/<category>/
     rx_gain_dbd: Mapped[float] = mapped_column(Float, default=0.0)
     description: Mapped[str] = mapped_column(Text, default="")
+    # Pattern metadata (from the imported file, the generator, or entered by hand)
+    gain_dbi: Mapped[float | None] = mapped_column(Float, nullable=True)
+    frequency_mhz: Mapped[float | None] = mapped_column(Float, nullable=True)
+    h_beamwidth: Mapped[float | None] = mapped_column(Float, nullable=True)
+    v_beamwidth: Mapped[float | None] = mapped_column(Float, nullable=True)
+    electrical_tilt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    front_to_back: Mapped[float | None] = mapped_column(Float, nullable=True)
+    manufacturer: Mapped[str] = mapped_column(String(120), default="")
+    source_format: Mapped[str] = mapped_column(String(30), default="")
+    # {"horizontal": [360 dB], "vertical": [360 dB]} attenuation, see engine/antennas.py
+    pattern_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class Plot(TimestampMixin, Base):
@@ -137,6 +148,9 @@ class Plot(TimestampMixin, Base):
 
     frequency_mhz: Mapped[float] = mapped_column(Float)
     erp_watts: Mapped[float] = mapped_column(Float, default=1.0)
+    # When set, ERP is computed from transmitter power, antenna gain and cable loss.
+    tx_power_w: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cable_loss_db: Mapped[float] = mapped_column(Float, default=0.0)
     radius_km: Mapped[float] = mapped_column(Float, default=10.0)
     resolution: Mapped[int] = mapped_column(Integer, default=1200)
     rx_height_m: Mapped[float] = mapped_column(Float, default=1.5)

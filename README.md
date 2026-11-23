@@ -35,6 +35,16 @@ model with buildings) is downloaded automatically.
   Tiles are downloaded, converted to Signal-Server's SDF format and cached when a plot first
   needs them. Ocean tiles become sea-level tiles, and Signal-Server's tile names near the 0°
   meridian are handled. The globe's terrain is drawn from the same tiles.
+- **Antenna library** (Data → Antennas):
+  - **Import** manufacturer pattern files in MSI/Planet (`.msi`, `.pln`, `.txt`), NSMA
+    TIA/EIA-804-B (`.adf`) and Radio Mobile `.ant` (V1, V2, V3) formats.
+  - **Preview** the horizontal and vertical cuts as polar charts before saving, together with the
+    gain, beamwidths, front-to-back ratio and downtilt read from the file.
+  - **Generate** omni or sector patterns from beamwidths, downtilt and front-to-back ratio.
+  - **ERP from transmitter power**: a plot can take transmitter power and cable loss instead of
+    ERP, and the antenna's gain is applied for you.
+
+  See [Antenna patterns](#antenna-patterns).
 - **Measuring tools**: geodesic distance (with segments and bearing), area, and a terrain
   profile between two points.
 - **Import KML/KMZ** as layers (styles kept). Placemark points can optionally become stations.
@@ -183,8 +193,11 @@ Interactive docs are served at `/docs`. Main endpoints:
   strongest first. `GET /api/elevation/profile?path=lon,lat;lon,lat` returns a terrain profile.
 - `GET/POST /api/basemaps` (offline map packs), `GET /api/basemaps/estimate`,
   `GET /api/basemaps/{id}.pmtiles` (supports HTTP Range requests)
+- `GET/POST /api/antennas` (multipart upload of `.msi`/`.pln`/`.txt`/`.adf`/`.ant`; optional
+  `gain_dbi`, `flip_vertical`), `POST /api/antennas/preview` (parse without saving),
+  `POST /api/antennas/generate[?preview=true]`, `GET /api/antennas/{id}/pattern`,
+  `PATCH/DELETE /api/antennas/{id}`
 - `GET/POST /api/stations`, `GET/PUT/DELETE /api/stations/{id}`, `GET /api/stations.geojson`
-- `GET/POST /api/antennas` (multipart `.ant` upload), `PATCH/DELETE /api/antennas/{id}`
 - `GET/POST /api/plots`, `GET/PUT/DELETE /api/plots/{id}`
 - `POST /api/plots/{id}/runs` queues a run. `GET /api/runs?west=&south=&east=&north=` does a
   spatial search on footprints, `GET /api/runs/{id}` returns a run and
@@ -234,6 +247,35 @@ For the end-to-end test, start a server with a worker and real engine, then run:
 ```bash
 cd frontend && SSG_E2E_URL=http://127.0.0.1:8080 npx playwright test
 ```
+
+## Antenna patterns
+
+Signal-Server only uses the *shape* of an antenna pattern (`.az`/`.el` files). The antenna's gain
+must be included in the ERP. The app converts imported files to those formats and keeps the
+original file next to them.
+
+| Format | Extensions | Notes |
+| --- | --- | --- |
+| MSI / Planet | `.msi`, `.pln`, `.txt` | The most common vendor format. It holds non-negative loss values and a `GAIN` line, in dBd unless marked dBi. Vertical angle 0 is the horizon and 90 is straight down. |
+| NSMA TIA/EIA-804-B | `.adf` | CloudRF's library format. Uses `KEY:,value` headers and `PATCUT` H/V cuts. The V cut is read as elevation with positive values *above* the horizon. Vendors differ on this, so check the preview and use *Flip vertical* if up and down look swapped. |
+| Radio Mobile | `.ant` | V1 has 360 horizontal values. V2 adds 181 vertical values from +90° (up) to −90°, the format of the bundled patterns; the back half of the vertical cut is mirrored. V3 adds 360 vertical values starting at +90°. |
+
+Where to get files:
+- **Ubiquiti**: airMAX/airFiber `.msi` and `.ant` files in the UISP help centre ("ISP Wireless
+  Antenna Data").
+- **CloudRF**: a free antenna database with patterns downloadable as `.adf`.
+- **Manufacturer sites** (Ericsson/Kathrein, CommScope, RFS, Cambium, Mimosa): `.msi`/`.pln`
+  downloads on product pages.
+
+*ERP from transmitter power* computes `ERP (W) = P_tx × 10^((G_dBi − 2.15 − cable loss) / 10)`
+(ERP is dipole-referenced). It needs the antenna's gain, which comes from the file or the
+generator, or can be entered on the antenna. Plots recompute ERP with the antenna's current gain
+when they run. Of the bundled patterns, only the generic dipole has a known gain (2.15 dBi).
+
+Generated patterns use the 3GPP TR 36.814 parabolic main lobe:
+`A(φ) = min(12 (φ / HPBW)², FtB)` horizontally and `min(12 ((θ − tilt) / VPBW)², SLA)`
+vertically. Unless you enter a gain, it is estimated with Kraus' approximation for sectors
+(`32400 / (HPBW × VPBW)`) and McDonald's for omnis (`101 / (VPBW − 0.0027 VPBW²)`).
 
 ## Outgoing network access
 

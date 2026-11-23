@@ -65,13 +65,17 @@ def install_bundled(antenna_dir: Path, color_dir: Path) -> list[tuple[str, str]]
     return sorted(found)
 
 
-def save_antenna_pattern(antenna_dir: Path, category: str, pattern: str, ant_bytes: bytes) -> Path:
+PATTERN_EXTENSIONS = (".ant", ".msi", ".pln", ".adf", ".txt", ".az", ".el")
+
+
+def save_antenna_files(antenna_dir: Path, category: str, pattern: str, az: str, el: str,
+                       original: bytes | None = None, original_ext: str = "") -> Path:
+    """Write Signal-Server .az/.el files (and keep the uploaded original next to them)."""
     folder = antenna_dir / safe_name(category)
     folder.mkdir(parents=True, exist_ok=True)
     base = folder / safe_name(pattern)
-    text = ant_bytes.decode("utf-8", errors="strict")
-    az, el = ant_to_az_el(text)
-    base.with_suffix(".ant").write_text(text)
+    if original is not None and original_ext in PATTERN_EXTENSIONS[:5]:
+        base.with_suffix(original_ext).write_bytes(original)
     base.with_suffix(".az").write_text(az)
     base.with_suffix(".el").write_text(el)
     return base
@@ -79,7 +83,7 @@ def save_antenna_pattern(antenna_dir: Path, category: str, pattern: str, ant_byt
 
 def remove_antenna_pattern(antenna_dir: Path, category: str, pattern: str) -> None:
     base = antenna_dir / safe_name(category) / safe_name(pattern)
-    for ext in (".ant", ".az", ".el"):
+    for ext in PATTERN_EXTENSIONS:
         base.with_suffix(ext).unlink(missing_ok=True)
 
 
