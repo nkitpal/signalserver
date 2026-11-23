@@ -73,6 +73,43 @@ export interface Antenna {
   pattern: string;
   rx_gain_dbd: number;
   description: string;
+  gain_dbi: number | null;
+  frequency_mhz: number | null;
+  h_beamwidth: number | null;
+  v_beamwidth: number | null;
+  electrical_tilt: number | null;
+  front_to_back: number | null;
+  manufacturer: string;
+  source_format: string;
+}
+
+export interface PatternData {
+  horizontal: number[];
+  vertical: number[];
+  vertical_complete?: boolean;
+  name?: string;
+  manufacturer?: string;
+  gain_dbi: number | null;
+  frequency_mhz?: number | null;
+  electrical_tilt: number | null;
+  source_format: string;
+  h_beamwidth: number | null;
+  v_beamwidth: number | null;
+  front_to_back: number | null;
+  peak_tilt?: number;
+  warnings?: string[];
+}
+
+export interface GenerateInput {
+  name?: string;
+  category?: string;
+  kind: "omni" | "sector";
+  h_beamwidth: number;
+  v_beamwidth: number;
+  gain_dbi: number | null;
+  front_to_back: number;
+  electrical_tilt: number;
+  frequency_mhz?: number | null;
 }
 
 export interface LegendEntry {
@@ -140,6 +177,8 @@ export interface Plot {
   rx_station_id: number | null;
   frequency_mhz: number;
   erp_watts: number;
+  tx_power_w: number | null;
+  cable_loss_db: number;
   radius_km: number;
   resolution: 300 | 600 | 1200 | 3600;
   rx_height_m: number;
@@ -260,6 +299,12 @@ export const api = {
   deleteStation: (id: number) => request<void>("DELETE", `/api/stations/${id}`),
   antennas: () => request<Antenna[]>("GET", "/api/antennas"),
   createAntenna: (form: FormData) => request<Antenna>("POST", "/api/antennas", form),
+  previewAntenna: (form: FormData) => request<PatternData>("POST", "/api/antennas/preview", form),
+  generateAntenna: (g: GenerateInput, preview: boolean) =>
+    request<PatternData & Antenna>("POST", `/api/antennas/generate${preview ? "?preview=true" : ""}`, g),
+  antennaPattern: (id: number) => request<PatternData>("GET", `/api/antennas/${id}/pattern`),
+  updateAntenna: (id: number, a: Partial<Pick<Antenna, "name" | "gain_dbi" | "manufacturer" | "rx_gain_dbd" | "description">>) =>
+    request<Antenna>("PATCH", `/api/antennas/${id}`, a),
   deleteAntenna: (id: number) => request<void>("DELETE", `/api/antennas/${id}`),
   plots: (projectId?: number) => request<Plot[]>("GET", `/api/plots${projectId ? `?project_id=${projectId}` : ""}`),
   createPlot: (p: PlotInput) => request<Plot>("POST", "/api/plots", p),

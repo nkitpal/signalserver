@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..config import Settings, get_settings
 from ..db import get_db
-from ..engine.patterns import remove_antenna_pattern, safe_name, save_antenna_pattern
+from ..engine.antennas import erp_watts
 from ..models import Antenna, Folder, Plot, PlotRun, Project, Station
 from ..schemas import (
-    AntennaOut,
-    AntennaUpdate,
     PlotIn,
     PlotOut,
     StationIn,
@@ -142,72 +140,23 @@ def delete_station(station_id: int, db: Session = Depends(get_db)):
     _commit(db, "station")
 
 
-# Antennas -------------------------------------------------------------------
-@router.get("/antennas", response_model=list[AntennaOut])
-def list_antennas(q: str = "", db: Session = Depends(get_db)):
-    stmt = select(Antenna).order_by(Antenna.name)
-    if q:
-        stmt = stmt.where(Antenna.name.ilike(f"%{q}%"))
-    return list(db.scalars(stmt))
-
-
-@router.post("/antennas", response_model=AntennaOut, status_code=201)
-async def create_antenna(
-    name: str = Form(..., min_length=1, max_length=120),
-    category: str = Form("custom"),
-    rx_gain_dbd: float = Form(0.0),
-    description: str = Form(""),
-    file: UploadFile = File(..., description=".ant pattern file"),
-    db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-):
-    if not (file.filename or "").lower().endswith(".ant"):
-        raise HTTPException(422, "Antenna pattern must be an .ant file")
-    content = await file.read()
-    if len(content) > 1_000_000:
-        raise HTTPException(413, "Pattern file too large")
-    if db.scalar(select(func.count()).where(Antenna.name == name)):
-        raise HTTPException(409, "An antenna with that name already exists")
-    try:
-        category, pattern = safe_name(category), safe_name(name)
-        save_antenna_pattern(settings.antenna_dir, category, pattern, content)
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise HTTPException(422, f"Invalid .ant file: {exc}") from exc
-    antenna = Antenna(name=name, category=category, pattern=pattern,
-                      rx_gain_dbd=rx_gain_dbd, description=description)
-    db.add(antenna)
-    _commit(db, "antenna")
-    return antenna
-
-
-@router.patch("/antennas/{antenna_id}", response_model=AntennaOut)
-def update_antenna(antenna_id: int, body: AntennaUpdate, db: Session = Depends(get_db)):
-    antenna = _get(db, Antenna, antenna_id)
-    for k, v in body.model_dump(exclude_none=True).items():
-        setattr(antenna, k, v)
-    _commit(db, "antenna")
-    return antenna
-
-
-@router.delete("/antennas/{antenna_id}", status_code=204)
-def delete_antenna(antenna_id: int, db: Session = Depends(get_db),
-                   settings: Settings = Depends(get_settings)):
-    antenna = _get(db, Antenna, antenna_id)
-    category, pattern = antenna.category, antenna.pattern
-    db.delete(antenna)
-    _commit(db, "antenna")
-    shared = db.scalar(select(func.count()).where(Antenna.category == category,
-                                                  Antenna.pattern == pattern))
-    if not shared:
-        remove_antenna_pattern(settings.antenna_dir, category, pattern)
-
-
 # Plots ----------------------------------------------------------------------
 def _plot_out(db: Session, plot: Plot) -> PlotOut:
     out = PlotOut.model_validate(plot)
     latest = db.scalar(select(PlotRun).where(PlotRun.plot_id == plot.id).order_by(PlotRun.id.desc()).limit(1))
     out.latest_run = run_summary(latest) if latest else None
     return out
+
+
+def _computed_erp(db: Session, body: PlotIn) -> float | None:
+    """ERP from transmitter power when given; needs the antenna's gain."""
+    if body.tx_power_w is None:
+        return None
+    antenna = _get(db, Antenna, body.antenna_id)
+    if antenna.gain_dbi is None:
+        raise HTTPException(422, f"Antenna “{antenna.name}” has no gain set; enter its gain (dBi) "
+                                 "in the antenna library or give the ERP directly")
+    return round(erp_watts(body.tx_power_w, antenna.gain_dbi, body.cable_loss_db), 6)
 
 
 def _validate_refs(db: Session, body: PlotIn, project_id: int) -> None:
@@ -239,6 +188,8 @@ def create_plot(body: PlotIn, db: Session = Depends(get_db)):
     else:
         data["project_id"], data["folder_id"] = resolve_scope(db, body.project_id, body.folder_id)
     _validate_refs(db, body, data["project_id"])
+    if (erp := _computed_erp(db, body)) is not None:
+        data["erp_watts"] = erp
     plot = Plot(**data)
     db.add(plot)
     _commit(db, "plot")
@@ -260,6 +211,8 @@ def update_plot(plot_id: int, body: PlotIn, db: Session = Depends(get_db)):
         raise HTTPException(422, "Plots cannot move between projects")
     data["project_id"], data["folder_id"] = project_id, folder_id
     _validate_refs(db, body, project_id)
+    if (erp := _computed_erp(db, body)) is not None:
+        data["erp_watts"] = erp
     for k, v in data.items():
         setattr(plot, k, v)
     _commit(db, "plot")

@@ -18,6 +18,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
 button, input, select, textarea { font: inherit; color: inherit; }
 a { color: var(--accent); }
@@ -267,3 +268,21 @@ a.btn { display: inline-block; background: #243041; border: 1px solid var(--line
   .ctl.tools button { padding: 4px 6px; }
   .measure { bottom: 8px; }
 }
+
+/* --- antennas ----------------------------------------------------------- */
+.polars { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.polar { width: 100%; height: auto; background: #121922; border-radius: 8px; }
+.polar .ring { fill: none; stroke: #263241; }
+.polar .spoke { stroke: #1f2a36; }
+.polar .tick { fill: var(--muted); font-size: 8px; }
+.polar .tick.axis { font-size: 9px; }
+.polar .title { fill: var(--text); font-size: 10px; }
+.polar .lobe { fill: rgba(77, 163, 255, 0.25); stroke: var(--accent); stroke-width: 1.5; }
+.antenna-row { cursor: pointer; }
+.antenna-row:hover b { color: var(--accent); }
+.actions.tight { margin: 0; }
+.meta.warn, .erp-out.warn { color: var(--warn); }
+.erp-out { margin: 0; }
+.power { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.preview:empty { display: none; }
+@media (max-width: 760px) { .polars { grid-template-columns: 1fr; } }

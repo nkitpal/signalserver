@@ -79,6 +79,9 @@ class AntennaUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=120)
     rx_gain_dbd: float | None = None
     description: str | None = None
+    gain_dbi: float | None = Field(None, ge=-20, le=60)
+    manufacturer: str | None = Field(None, max_length=120)
+    frequency_mhz: float | None = Field(None, gt=0)
 
 
 class AntennaOut(ORM):
@@ -88,7 +91,29 @@ class AntennaOut(ORM):
     pattern: str
     rx_gain_dbd: float
     description: str
+    gain_dbi: float | None = None
+    frequency_mhz: float | None = None
+    h_beamwidth: float | None = None
+    v_beamwidth: float | None = None
+    electrical_tilt: float | None = None
+    front_to_back: float | None = None
+    manufacturer: str = ""
+    source_format: str = ""
     created_at: datetime
+
+
+class GenerateIn(BaseModel):
+    name: str = Field("", max_length=120)
+    category: str = Field("generated", max_length=50)
+    kind: Literal["omni", "sector"] = "sector"
+    h_beamwidth: float = Field(65.0, ge=1, le=360)
+    v_beamwidth: float = Field(10.0, ge=1, le=180)
+    gain_dbi: float | None = Field(None, ge=-20, le=40)
+    front_to_back: float = Field(25.0, ge=0, le=60)
+    electrical_tilt: float = Field(0.0, ge=-30, le=30)
+    side_lobe: float = Field(20.0, ge=3, le=60)
+    frequency_mhz: float | None = Field(None, gt=0)
+    description: str = ""
 
 
 # Plots ----------------------------------------------------------------------
@@ -104,6 +129,11 @@ class PlotIn(BaseModel):
     rx_station_id: int | None = None
     frequency_mhz: float = Field(ge=20, le=100000)
     erp_watts: float = Field(1.0, ge=0, le=10_000_000)
+    tx_power_w: float | None = Field(
+        None, ge=0, le=10_000_000,
+        description="If set, ERP = tx power x antenna gain (dBi - 2.15) - cable loss",
+    )
+    cable_loss_db: float = Field(0.0, ge=0, le=60)
     radius_km: float = Field(10.0, gt=0, le=300)
     resolution: Literal[300, 600, 1200, 3600] = 1200
     elevation_model: ElevationModel = "dem3"
