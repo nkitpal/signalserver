@@ -30,6 +30,33 @@ def parse_bounds(engine_output: str) -> tuple[float, float, float, float] | None
     return north, east, south, west
 
 
+def read_rgb(ppm: Path) -> np.ndarray:
+    with Image.open(ppm) as img:
+        return np.asarray(img.convert("RGB"))
+
+
+def write_index_png(index: np.ndarray, path: Path) -> None:
+    """8-bit greyscale band indices (255 = no data) for the browser."""
+    Image.fromarray(index, "L").save(path, optimize=True)
+
+
+def write_values_tif(values: np.ndarray, bounds: tuple[float, float, float, float], path: Path,
+                     unit: str) -> None:
+    """Int16 GeoTIFF (EPSG:4326) of decoded values, nodata -32768."""
+    import rasterio
+    from rasterio.transform import from_bounds
+
+    north, east, south, west = bounds
+    height, width = values.shape
+    profile = dict(driver="GTiff", width=width, height=height, count=1, dtype="int16",
+                   crs="EPSG:4326", transform=from_bounds(west, south, east, north, width, height),
+                   nodata=-32768, compress="deflate", tiled=True, blockxsize=256, blockysize=256)
+    with rasterio.open(path, "w", **profile) as dst:
+        dst.write(values, 1)
+        dst.update_tags(1, unit=unit)
+        dst.set_band_description(1, f"signal ({unit})")
+
+
 def ppm_to_rgba(ppm: Path) -> np.ndarray:
     """Load the engine image; white (no coverage) becomes transparent."""
     with Image.open(ppm) as img:

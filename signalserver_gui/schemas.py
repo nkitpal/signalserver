@@ -12,8 +12,50 @@ class ORM(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+# Projects / folders -----------------------------------------------------------
+class ProjectIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = ""
+
+
+class ProjectOut(ProjectIn, ORM):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class FolderIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    parent_id: int | None = None
+    position: int = 0
+
+
+class FolderOut(FolderIn, ORM):
+    id: int
+    project_id: int
+
+
+class MoveIn(BaseModel):
+    folder_id: int | None = None
+
+
+class LayerOut(ORM):
+    id: int
+    project_id: int
+    folder_id: int | None
+    name: str
+    kind: str
+    filename: str
+    feature_count: int
+    created_at: datetime
+    url: str = ""
+    bounds: list[float] | None = None
+
+
 # Stations -------------------------------------------------------------------
 class StationIn(BaseModel):
+    project_id: int | None = Field(None, description="Defaults to the 'Default' project")
+    folder_id: int | None = None
     name: str = Field(min_length=1, max_length=120)
     latitude: float = Field(ge=-70, le=70, description="Signal-Server supports +/-70 degrees")
     longitude: float = Field(ge=-180, le=180)
@@ -27,6 +69,7 @@ class StationIn(BaseModel):
 
 class StationOut(StationIn, ORM):
     id: int
+    project_id: int
     created_at: datetime
     updated_at: datetime
 
@@ -49,7 +92,12 @@ class AntennaOut(ORM):
 
 
 # Plots ----------------------------------------------------------------------
+ElevationModel = Literal["dem3", "cop30", "cop30_buildings"]
+
+
 class PlotIn(BaseModel):
+    project_id: int | None = Field(None, description="Defaults to the 'Default' project")
+    folder_id: int | None = None
     name: str = Field(min_length=3, max_length=120)
     antenna_id: int
     tx_station_id: int
@@ -57,7 +105,8 @@ class PlotIn(BaseModel):
     frequency_mhz: float = Field(ge=20, le=100000)
     erp_watts: float = Field(1.0, ge=0, le=10_000_000)
     radius_km: float = Field(10.0, gt=0, le=300)
-    resolution: Literal[300, 600, 1200] = 1200
+    resolution: Literal[300, 600, 1200, 3600] = 1200
+    elevation_model: ElevationModel = "dem3"
     rx_height_m: float = Field(1.5, ge=0, le=1000)
     rx_threshold: float | None = None
     propagation_model: int = Field(1, ge=1, le=12)
@@ -82,11 +131,14 @@ class PlotIn(BaseModel):
             raise ValueError("Transmitter and receiver stations must be different")
         if self.do_p2p_analysis and self.rx_station_id is None:
             raise ValueError("Path analysis needs a receiver station")
+        if self.resolution == 3600 and self.elevation_model == "dem3":
+            raise ValueError("3600 ppd needs a 1\" elevation model (Copernicus 30 m)")
         return self
 
 
 class PlotOut(PlotIn, ORM):
     id: int
+    project_id: int
     created_at: datetime
     updated_at: datetime
     latest_run: "RunSummary | None" = None
@@ -122,6 +174,9 @@ class RunSummary(ORM):
     files: list[str] = []
     legend: list[dict] = []
     image_url: str | None = None
+    values_url: str | None = None
+    value_top: int | None = None
+    value_step: int | None = None
     opacity: float = 0.7
     units: str = "dBm"
 
@@ -134,6 +189,7 @@ class RunDetail(RunSummary):
 
 
 class PrefetchIn(BaseModel):
+    model: Literal["dem3", "cop30", "cop30_buildings"] = "dem3"
     west: float = Field(ge=-180, le=180)
     south: float = Field(ge=-90, le=90)
     east: float = Field(ge=-180, le=180)

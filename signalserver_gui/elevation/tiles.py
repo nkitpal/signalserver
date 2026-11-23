@@ -52,15 +52,19 @@ class TileId:
         """Western-positive longitude of the tile's east edge, wrapped to 0..359."""
         return (-(self.lon + 1)) % 360
 
-    def sdf_names(self) -> list[str]:
-        """All SDF file names Signal-Server may request for this tile."""
+    def sdf_names(self, hd: bool = False) -> list[str]:
+        """All SDF file names Signal-Server may request for this tile.
+
+        ``hd``: the 1" (3600 samples/degree) variant read by signalserverHD.
+        """
         w = self.west_min
-        names = [f"{self.lat}_{self.lat + 1}_{w}_{w + 1}.sdf"]
+        suffix = "-hd.sdf" if hd else ".sdf"
+        westings = [(w, w + 1)]
         if w == 359:
-            names.append(f"{self.lat}_{self.lat + 1}_-1_0.sdf")
+            westings.append((-1, 0))
         if w == 0:
-            names.append(f"{self.lat}_{self.lat + 1}_360_361.sdf")
-        return names
+            westings.append((360, 361))
+        return [f"{self.lat}_{self.lat + 1}_{a}_{b}{suffix}" for a, b in westings]
 
     @property
     def bounds(self) -> tuple[float, float, float, float]:
@@ -135,6 +139,13 @@ def fill_voids(grid: np.ndarray) -> np.ndarray:
     return np.rint(filled).astype(np.int16)
 
 
+def downsample_to_dem3(grid: np.ndarray) -> np.ndarray:
+    """3601x3601 (1") grid -> 1201x1201 (3") by taking every third sample."""
+    if grid.shape[0] == 3601:
+        return grid[::3, ::3]
+    return resample_to_dem3(grid)
+
+
 def resample_to_dem3(grid: np.ndarray) -> np.ndarray:
     """Bring any square grid with overlapping edges to 1201x1201 (nearest sample)."""
     side = grid.shape[0]
@@ -144,26 +155,29 @@ def resample_to_dem3(grid: np.ndarray) -> np.ndarray:
     return grid[np.ix_(idx, idx)]
 
 
-def sdf_body(grid: np.ndarray | None) -> np.ndarray:
-    """Return the 1200x1200 SDF sample order for a 1201x1201 HGT grid.
+def sdf_body(grid: np.ndarray | None, ippd: int = SDF_IPPD) -> np.ndarray:
+    """Return the ippd x ippd SDF sample order for an (ippd+1)^2 HGT-style grid.
 
-    Matches srtm2sdf: rows from south (index 1200) to north (index 1, the
+    Matches srtm2sdf: rows from south (index ippd) to north (index 1, the
     north edge row 0 is dropped) and, within each row, columns from east
-    (index 1199, the east edge column 1200 is dropped) to west (index 0).
+    (index ippd-1, the east edge column is dropped) to west (index 0).
     """
     if grid is None:
-        return np.zeros((SDF_IPPD, SDF_IPPD), dtype=np.int16)
-    return grid[SDF_IPPD:0:-1, SDF_IPPD - 1 :: -1]
+        return np.zeros((ippd, ippd), dtype=np.int16)
+    if grid.shape[0] != ippd + 1:
+        raise ValueError(f"grid is {grid.shape}, expected {ippd + 1} samples per side")
+    return grid[ippd:0:-1, ippd - 1 :: -1]
 
 
-def write_sdf(tile: TileId, grid: np.ndarray | None, out_dir: Path) -> list[Path]:
+def write_sdf(tile: TileId, grid: np.ndarray | None, out_dir: Path, hd: bool = False) -> list[Path]:
     """Write every SDF name for ``tile``; ``grid=None`` writes a sea-level tile."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    body = sdf_body(grid)
+    body = sdf_body(grid, 3600 if hd else SDF_IPPD)
     payload = "\n".join(map(str, body.ravel().tolist())) + "\n"
     written = []
-    for name in tile.sdf_names():
-        min_lat, max_lat, min_west, max_west = (int(p) for p in name[:-4].split("_"))
+    for name in tile.sdf_names(hd):
+        stem = name[: -len("-hd.sdf")] if hd else name[:-4]
+        min_lat, max_lat, min_west, max_west = (int(p) for p in stem.split("_"))
         header = f"{max_west}\n{min_lat}\n{min_west}\n{max_lat}\n"
         target = out_dir / name
         fd, tmp = tempfile.mkstemp(dir=out_dir, suffix=".part")

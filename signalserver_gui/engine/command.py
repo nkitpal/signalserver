@@ -26,6 +26,7 @@ def plot_params(plot: Plot) -> dict:
         "erp_watts": plot.erp_watts,
         "radius_km": plot.radius_km,
         "resolution": plot.resolution,
+        "elevation_model": plot.elevation_model,
         "rx_height_m": plot.rx_height_m,
         "rx_threshold": plot.rx_threshold,
         "propagation_model": plot.propagation_model,

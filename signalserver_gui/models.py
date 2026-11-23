@@ -13,6 +13,7 @@ from geoalchemy2 import Geometry
 from geoalchemy2.shape import from_shape, to_shape
 from shapely.geometry import Point, box
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -47,11 +48,40 @@ class TimestampMixin:
     )
 
 
+ELEVATION_MODELS = ("dem3", "cop30", "cop30_buildings")
+
+
+class Project(TimestampMixin, Base):
+    """A workspace holding a tree of folders with stations, plots and imported layers."""
+
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+
+
+class Folder(TimestampMixin, Base):
+    __tablename__ = "folders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("folders.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    position: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class Station(TimestampMixin, Base):
     __tablename__ = "stations"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(120), unique=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    folder_id: Mapped[int | None] = mapped_column(
+        ForeignKey("folders.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
     location: Mapped[object] = mapped_column(Geometry("POINT", srid=4326, spatial_index=True))
     height_m: Mapped[float] = mapped_column(Float, default=10.0)
     polarization: Mapped[str] = mapped_column(String(10), default="vertical")
@@ -63,6 +93,7 @@ class Station(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("polarization in ('vertical','horizontal')", name="station_polarization"),
         CheckConstraint("height_m >= 0", name="station_height_positive"),
+        UniqueConstraint("project_id", "name", name="uq_station_project_name"),
     )
 
     @property
@@ -92,12 +123,17 @@ class Plot(TimestampMixin, Base):
     __tablename__ = "plots"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(120), unique=True)
-    antenna_id: Mapped[int] = mapped_column(ForeignKey("antennas.id", ondelete="RESTRICT"))
-    tx_station_id: Mapped[int] = mapped_column(ForeignKey("stations.id", ondelete="RESTRICT"))
-    rx_station_id: Mapped[int | None] = mapped_column(
-        ForeignKey("stations.id", ondelete="RESTRICT"), nullable=True
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    folder_id: Mapped[int | None] = mapped_column(
+        ForeignKey("folders.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    name: Mapped[str] = mapped_column(String(120))
+    antenna_id: Mapped[int] = mapped_column(ForeignKey("antennas.id", ondelete="RESTRICT"))
+    # NO ACTION (checked at end of statement) so deleting a project/folder can cascade
+    # through plots and their stations together; a direct station delete is still refused.
+    tx_station_id: Mapped[int] = mapped_column(ForeignKey("stations.id"))
+    rx_station_id: Mapped[int | None] = mapped_column(ForeignKey("stations.id"), nullable=True)
+    elevation_model: Mapped[str] = mapped_column(String(20), default="dem3")
 
     frequency_mhz: Mapped[float] = mapped_column(Float)
     erp_watts: Mapped[float] = mapped_column(Float, default=1.0)
@@ -135,8 +171,15 @@ class Plot(TimestampMixin, Base):
         CheckConstraint("rx_station_id is null or rx_station_id <> tx_station_id", name="plot_distinct_stations"),
         CheckConstraint("frequency_mhz >= 20 and frequency_mhz <= 100000", name="plot_frequency_range"),
         CheckConstraint("radius_km > 0 and radius_km <= 300", name="plot_radius_range"),
-        CheckConstraint("resolution in (300, 600, 1200)", name="plot_resolution"),
+        CheckConstraint(
+            "resolution in (300, 600, 1200) or (resolution = 3600 and elevation_model <> 'dem3')",
+            name="plot_resolution",
+        ),
         CheckConstraint("opacity >= 0 and opacity <= 1", name="plot_opacity"),
+        CheckConstraint(
+            "elevation_model in ('dem3','cop30','cop30_buildings')", name="plot_elevation_model"
+        ),
+        UniqueConstraint("project_id", "name", name="uq_plot_project_name"),
     )
 
 
@@ -190,6 +233,10 @@ class PlotRun(Base):
     )
     files: Mapped[list] = mapped_column(JSONB, default=list)
     legend: Mapped[list] = mapped_column(JSONB, default=list)
+    # Per-pixel values: values.png holds index i -> value_top - i*value_step (255 = no data).
+    value_top: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    value_step: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    value_unit: Mapped[str | None] = mapped_column(String(10), nullable=True)
     report: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -208,8 +255,10 @@ class ElevationTile(Base):
     __tablename__ = "elevation_tiles"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    model: Mapped[str] = mapped_column(String(20), default="dem3")
     lat: Mapped[int] = mapped_column(Integer)
     lon: Mapped[int] = mapped_column(Integer)
+    building_count: Mapped[int] = mapped_column(Integer, default=0)
     has_data: Mapped[bool] = mapped_column(Boolean)  # False: no source tile (sea level)
     source: Mapped[str] = mapped_column(String(80), default="")
     min_elevation: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -217,7 +266,7 @@ class ElevationTile(Base):
     footprint: Mapped[object] = mapped_column(Geometry("POLYGON", srid=4326, spatial_index=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=utcnow)
 
-    __table_args__ = (UniqueConstraint("lat", "lon", name="uq_elevation_tile"),)
+    __table_args__ = (UniqueConstraint("model", "lat", "lon", name="uq_elevation_tile"),)
 
 
 class ElevationArchive(Base):
@@ -230,3 +279,43 @@ class ElevationArchive(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
     tile_count: Mapped[int] = mapped_column(Integer, default=0)
     downloaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=utcnow)
+
+
+class Layer(Base):
+    """An imported vector layer (KML/KMZ) shown on the globe."""
+
+    __tablename__ = "layers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    folder_id: Mapped[int | None] = mapped_column(
+        ForeignKey("folders.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    kind: Mapped[str] = mapped_column(String(10), default="kml")
+    filename: Mapped[str] = mapped_column(String(200))
+    feature_count: Mapped[int] = mapped_column(Integer, default=0)
+    footprint: Mapped[object | None] = mapped_column(
+        Geometry("POLYGON", srid=4326, spatial_index=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=utcnow)
+
+
+class BasemapPack(Base):
+    """An offline street-map extract (PMTiles) for a region."""
+
+    __tablename__ = "basemap_packs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    west: Mapped[float] = mapped_column(Float)
+    south: Mapped[float] = mapped_column(Float)
+    east: Mapped[float] = mapped_column(Float)
+    north: Mapped[float] = mapped_column(Float)
+    max_zoom: Mapped[int] = mapped_column(Integer, default=14)
+    source: Mapped[str] = mapped_column(String(200), default="")
+    tile_count: Mapped[int] = mapped_column(Integer, default=0)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    ready: Mapped[bool] = mapped_column(Boolean, default=False)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=utcnow)

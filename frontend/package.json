@@ -10,7 +10,11 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "cesium": "1.147.0"
+    "@mapbox/point-geometry": "1.1.0",
+    "@protomaps/basemaps": "5.7.1",
+    "cesium": "1.147.0",
+    "pmtiles": "4.4.1",
+    "protomaps-leaflet": "5.1.0"
   },
   "devDependencies": {
     "@playwright/test": "1.65.1",
