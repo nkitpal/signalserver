@@ -231,3 +231,136 @@ def build_pack(session: Session, settings: Settings, pack_id: int,
     finally:
         if own_client:
             client.close()
+
+
+# --- Raster (satellite) packs -------------------------------------------------
+def build_raster_pack(session: Session, settings: Settings, pack_id: int,
+                      progress: Callable[[float, str], None] | None = None,
+                      client: httpx.Client | None = None) -> BasemapPack:
+    """Download imagery tiles (``settings.satellite_pack_url`` template) for a pack's area."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from pmtiles.tile import tileid_to_zxy
+
+    progress = progress or (lambda f, s: None)
+    pack = session.get(BasemapPack, pack_id)
+    if pack is None:
+        raise BasemapError("Map pack no longer exists")
+    ids = tile_ids_for(pack.west, pack.south, pack.east, pack.north, pack.max_zoom)
+    if len(ids) > settings.basemap_max_tiles:
+        raise BasemapError(f"Area needs {len(ids)} tiles (limit {settings.basemap_max_tiles})")
+    own = client is None
+    client = client or httpx.Client(timeout=60, follow_redirects=True,
+                                    headers={"User-Agent": "signalserver-gui/2 (offline imagery)"})
+    template = settings.satellite_pack_url
+
+    def fetch(tid: int) -> tuple[int, bytes | None]:
+        z, x, y = tileid_to_zxy(tid)
+        for _ in range(3):
+            try:
+                r = client.get(template.format(z=z, x=x, y=y))
+            except httpx.HTTPError:
+                continue
+            if r.status_code == 200:
+                return tid, r.content
+            if r.status_code in (204, 404):
+                return tid, None
+        raise BasemapError(f"Imagery tile {z}/{x}/{y} failed to download")
+
+    try:
+        tiles: dict[int, bytes] = {}
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for i, (tid, data) in enumerate(pool.map(fetch, ids)):
+                if data:
+                    tiles[tid] = data
+                if i % 50 == 0:
+                    progress(0.95 * i / len(ids), f"downloading imagery {i}/{len(ids)}")
+        fmt = "png" if template.endswith(".png") else "jpg"
+        _write_raster_pmtiles(settings, pack, tiles, fmt, {"attribution": settings.satellite_pack_credit})
+        pack.source = template.split("/wmts/")[-1].split("/")[2] if "/wmts/" in template else template
+        session.commit()
+        progress(1.0, "imagery ready")
+        return pack
+    finally:
+        if own:
+            client.close()
+
+
+def import_mbtiles(session: Session, settings: Settings, pack: BasemapPack, path) -> BasemapPack:
+    """Convert an uploaded raster MBTiles file (your own imagery) into a pack."""
+    import sqlite3
+
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        meta = dict(con.execute("SELECT name, value FROM metadata").fetchall())
+        fmt = (meta.get("format") or "png").lower().replace("jpeg", "jpg")
+        if fmt not in ("png", "jpg", "webp"):
+            raise BasemapError(f"Only raster MBTiles (png/jpg/webp) are supported, not {fmt!r}")
+        tiles: dict[int, bytes] = {}
+        for z, x, y_tms, data in con.execute("SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles"):
+            if z > 22:
+                continue
+            tiles[zxy_to_tileid(z, x, (2**z - 1) - y_tms)] = bytes(data)
+    except sqlite3.DatabaseError as exc:
+        raise BasemapError(f"Not a valid MBTiles file: {exc}") from exc
+    finally:
+        con.close()
+    if not tiles:
+        raise BasemapError("MBTiles file contains no tiles")
+    if meta.get("bounds"):
+        try:
+            pack.west, pack.south, pack.east, pack.north = (float(v) for v in meta["bounds"].split(","))
+        except ValueError:
+            pass
+    zooms = [_zoom_of(t) for t in tiles]
+    pack.max_zoom = max(zooms)
+    pack.source = f"MBTiles: {meta.get('name', 'imported')}"
+    _write_raster_pmtiles(settings, pack, tiles, fmt, {"attribution": meta.get("attribution", "")})
+    session.commit()
+    return pack
+
+
+def _zoom_of(tid: int) -> int:
+    from pmtiles.tile import tileid_to_zxy
+
+    return tileid_to_zxy(tid)[0]
+
+
+def _write_raster_pmtiles(settings: Settings, pack: BasemapPack, tiles: dict[int, bytes], fmt: str,
+                          meta: dict) -> None:
+    settings.basemap_dir.mkdir(parents=True, exist_ok=True)
+    target = pack_path(settings, pack.id)
+    fd, tmp = tempfile.mkstemp(dir=settings.basemap_dir, suffix=".part")
+    with os.fdopen(fd, "wb") as fh:
+        writer = Writer(fh)
+        for tid in sorted(tiles):
+            writer.write_tile(tid, tiles[tid])
+        writer.finalize({
+            "tile_type": {"jpg": TileType.JPEG, "png": TileType.PNG, "webp": TileType.WEBP}[fmt],
+            "tile_compression": Compression.NONE,
+            "min_lon_e7": int(pack.west * 1e7), "min_lat_e7": int(pack.south * 1e7),
+            "max_lon_e7": int(pack.east * 1e7), "max_lat_e7": int(pack.north * 1e7),
+        }, {"name": pack.name, **meta})
+    os.replace(tmp, target)
+    pack.kind, pack.tile_format = "raster", fmt
+    pack.tile_count = len(tiles)
+    pack.size_bytes = target.stat().st_size
+    pack.ready = True
+
+
+class PackTileReader:
+    """Serve single tiles from a pack's PMTiles file (raster packs are drawn by Cesium directly)."""
+
+    _cache: dict[str, tuple[float, object]] = {}
+
+    @classmethod
+    def get(cls, path, z: int, x: int, y: int) -> bytes | None:
+        from pmtiles.reader import MmapSource, Reader
+
+        key = str(path)
+        mtime = os.path.getmtime(path)
+        cached = cls._cache.get(key)
+        if cached is None or cached[0] != mtime:
+            fh = open(path, "rb")  # kept open for the mmap; replaced when the file changes
+            cls._cache[key] = (mtime, Reader(MmapSource(fh)))
+        return cls._cache[key][1].get(z, x, y)

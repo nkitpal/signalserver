@@ -87,12 +87,19 @@ class MockServices:
         self.l32 = buf.getvalue()
         self.cop = make_cop_tif()
         self.pmtiles = make_pmtiles()
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (8, 8), (20, 120, 40)).save(buf, "JPEG")
+        self.jpeg = buf.getvalue()
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         self.calls.append(url)
         if url.endswith("/L32.zip"):
             return httpx.Response(200, content=self.l32)
+        if "eox" in url:  # satellite tiles: a tiny JPEG for every request
+            return httpx.Response(200, content=self.jpeg, headers={"content-type": "image/jpeg"})
         if "copernicus" in url:
             if "N47_00_E009_00" in url:
                 return httpx.Response(200, content=self.cop)

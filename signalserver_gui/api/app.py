@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import __version__
 from ..config import Settings, get_settings
 from ..engine.patterns import list_palettes
-from . import antennas, basemaps, elevation, projects, resources, runs
+from . import antennas, basemaps, elevation, localize, projects, resources, runs
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +46,7 @@ def create_app(settings: Settings | None = None, with_worker: bool = False) -> F
 
     app.include_router(projects.router)
     app.include_router(antennas.router)
+    app.include_router(localize.router)
     app.include_router(basemaps.router)
     app.include_router(resources.router)
     app.include_router(runs.router)

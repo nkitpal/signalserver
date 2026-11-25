@@ -45,6 +45,16 @@ model with buildings) is downloaded automatically.
     ERP, and the antenna's gain is applied for you.
 
   See [Antenna patterns](#antenna-patterns).
+- **Locate a transmitter** (Analyze tab): enter received power (dBm) at 3 or more places, typed,
+  pasted or clicked on the globe. *Terrain-aware* mode tries candidate transmitter positions on a
+  grid around the measurements, runs Signal-Server from each (in parallel) and refines around the
+  best fits. It reports the most likely position, a fit heat map, the likely area and the
+  estimated EIRP. *Distance only* fits a log-distance model instead, which is fast but ignores
+  terrain. In a synthetic Alpine test with 8 measurements and ±2 dB noise, the terrain-aware
+  estimate was 0.8 km from the true transmitter and the EIRP was within 1 dB. Both modes assume
+  an omnidirectional transmitter. Signal-Server's ITM is not reciprocal over rough terrain (one
+  test path differed by 50 dB depending on direction), which is why predictions always run from
+  the candidate outwards.
 - **Measuring tools**: geodesic distance (with segments and bearing), area, and a terrain
   profile between two points.
 - **Import KML/KMZ** as layers (styles kept). Placemark points can optionally become stations.
@@ -52,8 +62,11 @@ model with buildings) is downloaded automatically.
   the plot's location. To load it there, use Projects → New project → Import KML file. Google
   Earth can't load a KMZ from a URL.
 - **Offline maps**: download a region of the OpenStreetMap street map (Protomaps vector tiles,
-  stored as PMTiles) plus its elevation data. Then choose *Offline streets* to use the app
-  without internet. The browser draws the map itself, so no image tiles are stored.
+  stored as PMTiles) or **satellite imagery** (Sentinel-2 cloudless by EOX, 10 m), plus
+  elevation, then choose *Offline streets* or *Offline satellite*. You can also import your own
+  imagery as raster `.mbtiles` (drone or licensed aerial imagery). EOX imagery from 2018 onwards
+  is CC BY-NC-SA 4.0 (non-commercial use). Set `SSG_SATELLITE_PACK_URL` to the 2016 layer
+  `s2cloudless_3857` (CC BY 4.0) or to another tile source you are licensed to use.
 - **PostgreSQL + PostGIS**: stations, coverage footprints and elevation tiles are spatial
   columns with GiST indexes. Each run stores a snapshot of its inputs, so results stay
   reproducible after the plot is edited.
@@ -288,6 +301,7 @@ offline packs and `elevation import`.
 | `copernicus-dem-30m.s3.amazonaws.com` | Copernicus GLO-30 elevation |
 | `overpass-api.de` | OpenStreetMap buildings |
 | `build.protomaps.com`, `build-metadata.protomaps.dev` | offline street maps |
+| `tiles.maps.eox.at` | offline satellite imagery |
 
 The browser loads base-map tiles from OpenStreetMap and Esri unless you use *Offline streets*.
 

@@ -150,6 +150,14 @@ class Worker:
                 raise RuntimeError("plot run no longer exists")
             execute_run(run, session, self.settings, progress)
             session.commit()
+        elif job.kind == "basemap_raster":
+            from .basemap import build_raster_pack
+
+            build_raster_pack(session, self.settings, job.payload["pack_id"], progress)
+        elif job.kind == "localize":
+            from .localize import run_localization
+
+            run_localization(session, self.settings, job.payload["localization_id"], progress)
         elif job.kind == "basemap_pack":
             from .basemap import build_pack
 

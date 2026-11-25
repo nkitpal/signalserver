@@ -7,6 +7,9 @@ import {
   type ElevationModel,
   type Folder,
   type Layer,
+  type Localization,
+  type LocalizationInput,
+  type Measurement,
   type PatternData,
   type Plot,
   type PlotInput,
@@ -103,7 +106,8 @@ function setupChrome() {
   );
   const imagery = document.getElementById("imagery") as HTMLSelectElement;
   for (const i of state.config.imagery) imagery.append(h("option", { value: i.id }, i.name));
-  imagery.append(h("option", { value: "offline" }, "Offline streets"), h("option", { value: "none" }, "None"));
+  imagery.append(h("option", { value: "offline" }, "Offline streets"), h("option", { value: "offline_sat" }, "Offline satellite"),
+    h("option", { value: "none" }, "None"));
   const savedBase = store.get("base");
   if (savedBase) {
     imagery.value = savedBase;
@@ -112,7 +116,7 @@ function setupChrome() {
   imagery.addEventListener("change", () => {
     globe.setImagery(imagery.value);
     store.set("base", imagery.value);
-    if (imagery.value === "offline" && !state.packs.some((p) => p.ready))
+    if (imagery.value.startsWith("offline") && !state.packs.some((p) => p.ready && (p.kind === "raster") === (imagery.value === "offline_sat")))
       toast("No offline map packs yet: create one in the Data tab", "error");
   });
   const exag = document.getElementById("exaggeration") as HTMLInputElement;
@@ -940,7 +944,8 @@ function openPlotForm(p: Plot | null, folderId: number | null, txId?: number) {
   openDialog(p ? `Edit ${p.name}` : "New coverage plot", form);
 }
 
-function openStationForm(s: Station | null, folderId: number | null) {
+function openStationForm(s: Station | null, folderId: number | null, asNew = false) {
+  const editing = s != null && !asNew;
   const v: Partial<Station> = s ?? { height_m: 10, polarization: "vertical", rotation_deg: 0, downtilt_deg: 0, downtilt_direction_deg: 0, notes: "", folder_id: folderId };
   const lat = num("latitude", v.latitude, { min: -70, max: 70, required: true });
   const lon = num("longitude", v.longitude, { min: -180, max: 180, required: true });
@@ -987,7 +992,7 @@ function openStationForm(s: Station | null, folderId: number | null) {
     ),
     field("Notes", h("textarea", { name: "notes", rows: 2 }, v.notes ?? "")),
     h("div", { class: "actions" },
-      h("button", { class: "primary", type: "submit" }, s ? "Save" : "Create station"),
+      h("button", { class: "primary", type: "submit" }, editing ? "Save" : "Create station"),
       h("button", { type: "button", onclick: closeDialog }, "Cancel"),
     ),
   );
@@ -1003,7 +1008,7 @@ function openStationForm(s: Station | null, folderId: number | null) {
       downtilt_direction_deg: Number(f.downtilt_direction_deg || 0), notes: String(f.notes ?? ""),
     };
     try {
-      const saved = s ? await api.updateStation(s.id, body) : await api.createStation(body);
+      const saved = editing ? await api.updateStation(s!.id, body) : await api.createStation(body);
       closeDialog();
       state.selection = { kind: "station", id: saved.id };
       await refreshTree();
@@ -1012,7 +1017,7 @@ function openStationForm(s: Station | null, folderId: number | null) {
       toast((e as Error).message, "error");
     }
   });
-  openDialog(s ? `Edit ${s.name}` : "New station", form);
+  openDialog(editing ? `Edit ${s!.name}` : "New station", form);
 }
 
 function openImportForm(folderId: number | null) {
@@ -1052,6 +1057,137 @@ function openImportForm(folderId: number | null) {
 
 // ---------------------------------------------------------------- analyze tab
 function analyzeView() {
+  const wrap = analyzeCompareView();
+  wrap.append(locatorView());
+  return wrap;
+}
+
+// ---------------------------------------------------------------- transmitter locator
+
+let activeLoc: number | null = null;
+
+function locatorView() {
+  const box = h("div", {}, h("div", { class: "panel-head" }, h("h2", {}, "Locate a transmitter"),
+    h("button", { class: "primary small", onclick: () => openLocatorForm(null) }, "+ New")));
+  const list = h("article", { class: "card" }, h("p", { class: "meta" }, "Loading…"));
+  box.append(list);
+  if (state.projectId == null) return box;
+  void api.localizations(state.projectId).then((xs) => {
+
+    clear(list);
+    if (!xs.length) list.append(h("p", { class: "meta" }, "Enter received power (dBm) at 3 or more places; the app searches for the transmitter position that best explains them, using terrain."));
+    for (const l of xs) list.append(locCard(l));
+    if (xs.some((l) => l.status === "queued" || l.status === "running")) window.setTimeout(() => { if (state.tab === "analyze") render(); }, 2000);
+  });
+  return box;
+}
+
+function locCard(l: Localization) {
+  const r = l.result;
+  const busy = l.status === "queued" || l.status === "running";
+  return h("div", { class: `loc-row${activeLoc === l.id ? " active" : ""}` },
+    h("div", { class: "row" }, h("b", {}, l.name),
+      h("span", { class: `badge ${l.status}` }, busy ? `${Math.round(l.progress * 100)}%` : l.status === "done" ? "ready" : l.status)),
+    busy ? h("p", { class: "meta" }, l.stage || "queued") : null,
+    l.error ? h("p", { class: "meta warn" }, l.error.split("\n")[0]) : null,
+    r ? h("dl", { class: "kv" }, [
+      ["Position", `${r.latitude.toFixed(5)}, ${r.longitude.toFixed(5)}`],
+      ["Fit (RMS)", `${r.rms_db} dB from ${l.measurements.length} measurements`],
+      ["Likely area", `${r.likely_area_km2} km² (yellow box)`],
+      r.eirp_dbm != null ? ["Est. EIRP", `${r.eirp_dbm} dBm (≈ ${r.erp_w} W ERP)`] : ["Path-loss exponent", `${r.path_loss_exponent}`],
+    ].flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])) : null,
+    h("div", { class: "actions" },
+      r ? h("button", { class: "small", onclick: () => { activeLoc = l.id; globe.showLocalization(l); globe.flyTo(r.latitude, r.longitude, 25_000); render(); } }, "Show") : null,
+      r ? h("button", { class: "small", onclick: () => openStationAt(r.latitude, r.longitude, l.name) }, "Create station here") : null,
+      h("button", { class: "small", onclick: () => openLocatorForm(l) }, "Edit / re-run"),
+      h("button", { class: "small danger", onclick: async () => {
+        if (!confirm(`Delete “${l.name}”?`)) return;
+        await api.deleteLocalization(l.id);
+        if (activeLoc === l.id) { activeLoc = null; globe.showLocalization(null); }
+        render();
+      } }, "Delete")),
+  );
+}
+
+function openStationAt(lat: number, lon: number, name: string) {
+  openStationForm({ id: 0, project_id: state.projectId!, folder_id: null, name: `${name} (estimated)`, latitude: Number(lat.toFixed(6)),
+    longitude: Number(lon.toFixed(6)), height_m: 10, polarization: "vertical", rotation_deg: 0, downtilt_deg: 0,
+    downtilt_direction_deg: 0, notes: "Estimated from received-power measurements" } as Station, null, true);
+}
+
+function openLocatorForm(l: Localization | null) {
+  const v: Partial<LocalizationInput> = l ?? { method: "terrain", frequency_mhz: 446, tx_height_m: 10, rx_height_m: 1.5,
+    radius_km: 10, elevation_model: "dem3", propagation_model: 1, measurements: [] };
+  const rows = h("textarea", { name: "measurements", rows: 6, placeholder: "latitude, longitude, dBm — one per line\n47.36, 9.38, -92\n47.30, 9.36, -117" },
+    (v.measurements ?? []).map((m) => `${m.latitude}, ${m.longitude}, ${m.dbm}`).join("\n")) as HTMLTextAreaElement;
+  const parse = (): Measurement[] => rows.value.split(/\n+/).map((line) => line.split(/[,;\s]+/).filter(Boolean).map(Number))
+    .filter((a) => a.length >= 3 && a.slice(0, 3).every(Number.isFinite))
+    .map(([latitude, longitude, dbm]) => ({ latitude, longitude, dbm }));
+  const count = h("small", { class: "meta" });
+  const sync = () => { const m = parse(); count.textContent = `${m.length} measurement(s)`; globe.showLocalization(null, m); };
+  rows.addEventListener("input", sync);
+  const form = h("form", { class: "form" },
+    h("div", { class: "grid2" },
+      field("Name", text("name", l?.name ?? "", { required: true, placeholder: "e.g. Unknown 446 MHz" })),
+      field("Method", select("method", [["terrain", "Terrain-aware (Signal-Server)"], ["logdistance", "Distance only (fast)"]], v.method))),
+    field("Measurements", rows, "Paste “lat, lon, dBm” lines or add them by clicking the globe"),
+    h("div", { class: "row" },
+      h("button", { type: "button", onclick: () => {
+        document.body.classList.add("dialog-hidden");
+        toast("Click where you measured (Esc to cancel)");
+        globe.pickOnce((la, lo) => {
+          document.body.classList.remove("dialog-hidden");
+          const dbm = prompt(`Received power at ${la.toFixed(5)}, ${lo.toFixed(5)} (dBm)`, "-90");
+          if (dbm == null || !Number.isFinite(Number(dbm))) return;
+          rows.value = `${rows.value.trim()}${rows.value.trim() ? "\n" : ""}${la.toFixed(6)}, ${lo.toFixed(6)}, ${Number(dbm)}`;
+          sync();
+        });
+      } }, "📍 Add point on globe"), count),
+    h("div", { class: "grid3" },
+      field("Frequency (MHz)", num("frequency_mhz", v.frequency_mhz, { min: 20, max: 100000, required: true })),
+      field("Tx height guess (m)", num("tx_height_m", v.tx_height_m, { min: 0 }), "Above ground"),
+      field("Rx height (m)", num("rx_height_m", v.rx_height_m, { min: 0 }), "Measuring antenna"),
+      field("Search margin (km)", num("radius_km", v.radius_km, { min: 0.5, max: 100 }), "Around the measured area"),
+      field("Elevation", select("elevation_model", Object.entries(state.config.elevation_models), v.elevation_model)),
+      field("Prop. model", select("propagation_model", Object.entries(state.config.propagation_models), v.propagation_model))),
+    h("p", { class: "meta" }, "Works best with 6+ measurements spread around the transmitter. Assumes an omnidirectional transmitter; the result shows a heat map of how well each position fits (green = best) and the likely area."),
+    h("div", { class: "actions" },
+      h("button", { class: "primary", type: "submit" }, l ? "Save & re-run" : "Locate"),
+      h("button", { type: "button", onclick: () => { closeDialog(); globe.showLocalization(null); } }, "Cancel")),
+  );
+  sync();
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = formValues(form);
+    const body: LocalizationInput = {
+      name: String(f.name), method: f.method as LocalizationInput["method"], frequency_mhz: Number(f.frequency_mhz),
+      tx_height_m: Number(f.tx_height_m), rx_height_m: Number(f.rx_height_m), radius_km: Number(f.radius_km),
+      elevation_model: f.elevation_model as ElevationModel, propagation_model: Number(f.propagation_model),
+      measurements: parse(),
+    };
+    if (body.measurements.length < 3) return toast("Enter at least 3 measurements", "error");
+    try {
+      const saved = l ? await api.updateLocalization(l.id, body) : await api.createLocalization(state.projectId!, body);
+      closeDialog();
+      activeLoc = saved.id;
+      state.tab = "analyze";
+      render();
+      const tick = async () => {
+        const x = await api.localization(saved.id);
+        if (x.status === "queued" || x.status === "running") { window.setTimeout(tick, 2000); return; }
+        if (x.status === "failed") toast(`Locating failed: ${(x.error ?? "").split("\n")[0]}`, "error");
+        else if (x.result) { globe.showLocalization(x); globe.flyTo(x.result.latitude, x.result.longitude, 25_000); toast("Transmitter position estimated", "ok"); }
+        if (state.tab === "analyze") render();
+      };
+      void tick();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  });
+  openDialog(l ? `Edit ${l.name}` : "Locate a transmitter", form);
+}
+
+function analyzeCompareView() {
   const items = visibleRunGrids();
   const tree = state.tree;
   const wrap = h("div", {}, h("div", { class: "panel-head" }, h("h2", {}, "Compare coverage")));
@@ -1169,7 +1305,7 @@ function dataView() {
     const job = p.job;
     packList.append(h("div", { class: "pack-row" },
       h("div", {}, h("b", {}, p.name),
-        h("div", { class: "meta" }, p.ready ? `${p.tile_count.toLocaleString()} tiles · ${(p.size_bytes / 1e6).toFixed(1)} MB · zoom ≤ ${p.max_zoom}`
+        h("div", { class: "meta" }, p.ready ? `${p.kind === "raster" ? "Satellite" : "Streets"} · ${p.tile_count.toLocaleString()} tiles · ${(p.size_bytes / 1e6).toFixed(1)} MB · zoom ≤ ${p.max_zoom}`
           : job ? `${job.status} ${job.stage} ${Math.round(job.progress * 100)}%${job.error ? ` — ${job.error}` : ""}` : "pending")),
       h("div", { class: "actions" },
         h("button", { class: "small", onclick: () => globe.flyToBounds(p.west, p.south, p.east, p.north) }, "View"),
@@ -1179,33 +1315,51 @@ function dataView() {
         } }, "Delete")),
     ));
   }
-  const zoom = select("max_zoom", [[14, "Streets (zoom 14)"], [12, "Towns (zoom 12)"], [10, "Regions (zoom 10)"]], 14) as HTMLSelectElement;
+  const kind = select("kind", [["vector", "Street map"], ["satellite", "Satellite (Sentinel-2, 10 m)"]], "vector") as HTMLSelectElement;
+  const zoom = select("max_zoom", [[14, "Detail: zoom 14"], [12, "Towns: zoom 12"], [10, "Regions: zoom 10"]], 14) as HTMLSelectElement;
+  const mbtiles = h("input", { type: "file", accept: ".mbtiles", hidden: true }) as HTMLInputElement;
+  mbtiles.addEventListener("change", async () => {
+    const file = mbtiles.files?.[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("name", file.name.replace(/\.mbtiles$/i, ""));
+    try {
+      toast("Importing imagery…");
+      await api.importPack(fd);
+      toast("Imagery imported: choose “Offline satellite” in the Map menu", "ok");
+      await refreshPacks();
+    } catch (e) { toast((e as Error).message, "error"); }
+  });
   const estimate = h("p", { class: "meta" }, "");
   const refreshEstimate = async () => {
     const r = globe.viewRectangle();
     if (!r) return;
-    const e = await api.estimatePack(clampRect(r), Number(zoom.value));
+    const e = await api.estimatePack(clampRect(r), Number(zoom.value), kind.value);
     estimate.textContent = `Current view: ${e.tiles.toLocaleString()} tiles, about ${e.approx_mb} MB${e.ok ? "" : " — too large, zoom in or lower the detail"}`;
   };
   zoom.addEventListener("change", refreshEstimate);
+  kind.addEventListener("change", refreshEstimate);
   void refreshEstimate();
   wrap.append(
     h("div", { class: "panel-head" }, h("h2", {}, "Offline maps")),
     h("article", { class: "card" },
-      h("p", { class: "meta" }, "Download OpenStreetMap street maps (Protomaps) and elevation for an area so the globe works without internet. Choose “Offline streets” in the Map menu to use them."),
+      h("p", { class: "meta" }, "Download street maps (OpenStreetMap via Protomaps) or satellite imagery (Sentinel-2 cloudless by EOX, 10 m, non-commercial licence) plus elevation for an area, then choose “Offline streets” or “Offline satellite” in the Map menu. You can also import your own imagery as .mbtiles."),
       packList,
-      h("div", { class: "row" }, zoom,
+      h("div", { class: "row" }, kind, zoom),
+      h("div", { class: "row" },
         h("button", { class: "primary", onclick: async () => {
           const r = globe.viewRectangle();
           if (!r) return toast("Zoom in to an area first");
           const name = prompt("Name for this offline map", "My area");
           if (!name) return;
           try {
-            await api.createPack({ name, ...clampRect(r), max_zoom: Number(zoom.value), with_elevation: true });
+            await api.createPack({ name, ...clampRect(r), max_zoom: Number(zoom.value), with_elevation: true, kind: kind.value as "vector" | "satellite" });
             await refreshPacks();
             pollPacks();
           } catch (e) { toast((e as Error).message, "error"); }
-        } }, "Download current view")),
+        } }, "Download current view"),
+        h("button", { onclick: () => mbtiles.click() }, "Import .mbtiles"), mbtiles),
       estimate,
     ),
   );

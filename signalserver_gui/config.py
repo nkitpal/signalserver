@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     basemap_builds_url: str = "https://build-metadata.protomaps.dev/builds.json"
     basemap_source_url: str = "https://build.protomaps.com"
     basemap_max_tiles: int = 400_000
+    # Offline satellite imagery: EOX Sentinel-2 cloudless (10 m). Years 2018+ are
+    # CC BY-NC-SA 4.0 (non-commercial); "s2cloudless_3857" (2016) is CC BY 4.0.
+    satellite_pack_url: str = (
+        "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2024_3857/default/g/{z}/{y}/{x}.jpg"
+    )
+    satellite_pack_credit: str = "Sentinel-2 cloudless by EOX IT Services GmbH (contains modified Copernicus Sentinel data)"
+    satellite_pack_max_zoom: int = 15
 
     # Worker
     worker_poll_interval_s: float = 1.0

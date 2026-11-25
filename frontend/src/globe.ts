@@ -28,7 +28,7 @@ import {
   type DataSource,
 } from "cesium";
 import "cesium/Build/Cesium/Widgets/widgets.css";
-import type { BasemapPack, GeoJSON, Layer, PathReport, RunSummary, Station, ViewerConfig } from "./api";
+import type { BasemapPack, GeoJSON, Layer, Localization, PathReport, RunSummary, Station, ViewerConfig } from "./api";
 import type { Composite } from "./analysis";
 import { VectorTileImageryProvider } from "./offline";
 
@@ -132,8 +132,19 @@ export class Globe {
     for (const l of this.baseLayers) layers.remove(l, true);
     this.baseLayers = [];
     if (id === "none") return;
+    if (id === "offline_sat") {
+      for (const p of this.packs.filter((x) => x.ready && x.kind === "raster" && x.tiles_url)) {
+        this.baseLayers.push(layers.addImageryProvider(new UrlTemplateImageryProvider({
+          // No rectangle: clipped edge tiles get stretched by Cesium; the server sends
+          // transparent tiles outside the pack instead.
+          url: p.tiles_url!, maximumLevel: p.max_zoom,
+          credit: "Imagery: Sentinel-2 cloudless by EOX (offline) / imported",
+        }), this.baseLayers.length));
+      }
+      return;
+    }
     if (id === "offline") {
-      const ready = this.packs.filter((p) => p.ready);
+      const ready = this.packs.filter((p) => p.ready && p.kind !== "raster");
       if (!ready.length) return;
       // Low zooms for the whole world from the first pack, detail inside every pack.
       this.baseLayers.push(layers.addImageryProvider(
@@ -153,7 +164,54 @@ export class Globe {
 
   setOfflinePacks(packs: BasemapPack[]) {
     this.packs = packs;
-    if (this.baseId === "offline") this.setImagery("offline");
+    if (this.baseId.startsWith("offline")) this.setImagery(this.baseId);
+  }
+
+  // Transmitter localization ----------------------------------------------------
+  private locEntities: Entity[] = [];
+  private locLayer: ImageryLayer | null = null;
+
+  showLocalization(loc: Localization | null, draft: { latitude: number; longitude: number; dbm: number }[] = []) {
+    for (const e of this.locEntities) this.viewer.entities.remove(e);
+    this.locEntities = [];
+    if (this.locLayer) {
+      this.viewer.imageryLayers.remove(this.locLayer, true);
+      this.locLayer = null;
+    }
+    const pts = loc ? loc.measurements : draft;
+    pts.forEach((m, i) => {
+      this.locEntities.push(this.viewer.entities.add({
+        position: Cartesian3.fromDegrees(m.longitude, m.latitude),
+        point: { pixelSize: 9, color: Color.fromCssColorString("#c77dff"), outlineColor: Color.WHITE, outlineWidth: 1,
+          heightReference: HeightReference.CLAMP_TO_GROUND, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+        label: { text: `${i + 1}: ${m.dbm.toFixed(0)} dBm`, font: "600 12px system-ui, sans-serif",
+          style: LabelStyle.FILL_AND_OUTLINE, outlineWidth: 3, outlineColor: Color.BLACK, fillColor: Color.WHITE,
+          verticalOrigin: VerticalOrigin.BOTTOM, pixelOffset: new Cartesian2(0, -10),
+          heightReference: HeightReference.CLAMP_TO_GROUND, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+      }));
+    });
+    const r = loc?.result;
+    if (!r || !loc?.image_url) return;
+    const [w, s, e, n] = r.bounds;
+    this.locLayer = ImageryLayer.fromProviderAsync(
+      SingleTileImageryProvider.fromUrl(`${loc.image_url}?v=${loc.id}-${r.rms_db}`, { rectangle: Rectangle.fromDegrees(w, s, e, n) }),
+      { alpha: 0.75 });
+    this.viewer.imageryLayers.add(this.locLayer);
+    const [lw, ls, le, ln] = r.likely_bounds;
+    this.locEntities.push(this.viewer.entities.add({
+      rectangle: { coordinates: Rectangle.fromDegrees(lw, ls, le, ln), material: Color.TRANSPARENT,
+        outline: true, outlineColor: Color.fromCssColorString("#ffcc33"), height: 0 },
+    }));
+    this.locEntities.push(this.viewer.entities.add({
+      position: Cartesian3.fromDegrees(r.longitude, r.latitude),
+      billboard: undefined,
+      point: { pixelSize: 16, color: Color.fromCssColorString("#ff3d3d"), outlineColor: Color.WHITE, outlineWidth: 3,
+        heightReference: HeightReference.CLAMP_TO_GROUND, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+      label: { text: "Estimated transmitter", font: "700 13px system-ui, sans-serif", style: LabelStyle.FILL_AND_OUTLINE,
+        outlineWidth: 3, outlineColor: Color.BLACK, fillColor: Color.fromCssColorString("#ffdddd"),
+        verticalOrigin: VerticalOrigin.BOTTOM, pixelOffset: new Cartesian2(0, -14),
+        heightReference: HeightReference.CLAMP_TO_GROUND, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    }));
   }
 
   // Imported KML layers ------------------------------------------------------

@@ -327,9 +327,31 @@ class BasemapPack(Base):
     east: Mapped[float] = mapped_column(Float)
     north: Mapped[float] = mapped_column(Float)
     max_zoom: Mapped[int] = mapped_column(Integer, default=14)
+    kind: Mapped[str] = mapped_column(String(10), default="vector")  # vector | raster
+    tile_format: Mapped[str] = mapped_column(String(10), default="mvt")  # mvt | jpg | png | webp
     source: Mapped[str] = mapped_column(String(200), default="")
     tile_count: Mapped[int] = mapped_column(Integer, default=0)
     size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     ready: Mapped[bool] = mapped_column(Boolean, default=False)
     job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=utcnow)
+
+
+class Localization(TimestampMixin, Base):
+    """Estimate a transmitter's position from received-power measurements."""
+
+    __tablename__ = "localizations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    method: Mapped[str] = mapped_column(String(20), default="terrain")  # terrain | logdistance
+    frequency_mhz: Mapped[float] = mapped_column(Float, default=446.0)
+    tx_height_m: Mapped[float] = mapped_column(Float, default=10.0)  # assumed transmitter height
+    rx_height_m: Mapped[float] = mapped_column(Float, default=1.5)  # measurement antenna height
+    radius_km: Mapped[float] = mapped_column(Float, default=15.0)
+    elevation_model: Mapped[str] = mapped_column(String(20), default="dem3")
+    propagation_model: Mapped[int] = mapped_column(Integer, default=1)
+    measurements: Mapped[list] = mapped_column(JSONB, default=list)  # [{lat, lon, dbm}]
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True)
+    result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
