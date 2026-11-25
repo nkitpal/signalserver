@@ -45,7 +45,7 @@ if "-rla" in args:
     sys.exit(0)
 
 # Colour pixels with the bands of the -color palette (like the engine does):
-# band index grows with distance from the centre.
+# band index grows with distance from the centre; the disc fills the image height.
 palette = []
 color = opt("-color")
 if color:
@@ -58,9 +58,9 @@ with open(out + ".ppm", "wb") as fh:
     for y in range(h):
         for x in range(w):
             d2 = (x - w / 2) ** 2 + (y - h / 2) ** 2
-            if d2 < 100 and palette:
+            if d2 < 225 and palette:
                 fh.write(bytes(palette[min(int(d2 ** 0.5) * 3 + 20, len(palette) - 1)]))
-            elif d2 < 100:
+            elif d2 < 225:
                 fh.write(bytes((0, 200, 0)))
             else:
                 fh.write(bytes((255, 255, 255)))

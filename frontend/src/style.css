@@ -286,3 +286,7 @@ a.btn { display: inline-block; background: #243041; border: 1px solid var(--line
 .power { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
 .preview:empty { display: none; }
 @media (max-width: 760px) { .polars { grid-template-columns: 1fr; } }
+.loc-row { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.loc-row:last-child { border-bottom: 0; }
+.loc-row.active b { color: var(--accent); }
+.loc-row .row { margin-top: 0; justify-content: space-between; }

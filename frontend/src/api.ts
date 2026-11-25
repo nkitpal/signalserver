@@ -45,6 +45,8 @@ export interface BasemapPack {
   size_bytes: number;
   ready: boolean;
   url: string;
+  kind: "vector" | "raster";
+  tiles_url: string | null;
   job: { id: number; status: string; stage: string; progress: number; error: string | null } | null;
 }
 
@@ -284,13 +286,20 @@ export const api = {
       `/api/elevation/profile?samples=${samples}&path=${encodeURIComponent(path.map((p) => p.join(",")).join(";"))}`,
     ),
   basemaps: () => request<BasemapPack[]>("GET", "/api/basemaps"),
-  estimatePack: (b: { west: number; south: number; east: number; north: number }, maxZoom: number) =>
+  estimatePack: (b: { west: number; south: number; east: number; north: number }, maxZoom: number, kind = "vector") =>
     request<{ tiles: number; approx_mb: number; limit: number; ok: boolean }>(
       "GET",
-      `/api/basemaps/estimate?west=${b.west}&south=${b.south}&east=${b.east}&north=${b.north}&max_zoom=${maxZoom}`,
+      `/api/basemaps/estimate?west=${b.west}&south=${b.south}&east=${b.east}&north=${b.north}&max_zoom=${maxZoom}&kind=${kind}`,
     ),
-  createPack: (p: { name: string; west: number; south: number; east: number; north: number; max_zoom: number; with_elevation: boolean }) =>
+  createPack: (p: { name: string; west: number; south: number; east: number; north: number; max_zoom: number; with_elevation: boolean; kind: "vector" | "satellite" }) =>
     request<BasemapPack>("POST", "/api/basemaps", p),
+  importPack: (form: FormData) => request<BasemapPack>("POST", "/api/basemaps/import", form),
+  localizations: (projectId: number) => request<Localization[]>("GET", `/api/projects/${projectId}/localizations`),
+  createLocalization: (projectId: number, l: LocalizationInput) =>
+    request<Localization>("POST", `/api/projects/${projectId}/localizations`, l),
+  updateLocalization: (id: number, l: LocalizationInput) => request<Localization>("PUT", `/api/localizations/${id}`, l),
+  localization: (id: number) => request<Localization>("GET", `/api/localizations/${id}`),
+  deleteLocalization: (id: number) => request<void>("DELETE", `/api/localizations/${id}`),
   deletePack: (id: number) => request<void>("DELETE", `/api/basemaps/${id}`),
   stations: (projectId?: number) =>
     request<Station[]>("GET", `/api/stations${projectId ? `?project_id=${projectId}` : ""}`),
@@ -338,3 +347,45 @@ export interface GeoJSON {
 
 export const fileUrl = (runId: number, name: string, download = false) =>
   `/api/runs/${runId}/files/${encodeURIComponent(name)}${download ? "?download=true" : ""}`;
+
+export interface Measurement {
+  latitude: number;
+  longitude: number;
+  dbm: number;
+}
+
+export interface LocalizationInput {
+  name: string;
+  method: "terrain" | "logdistance";
+  frequency_mhz: number;
+  tx_height_m: number;
+  rx_height_m: number;
+  radius_km: number;
+  elevation_model: ElevationModel;
+  propagation_model: number;
+  measurements: Measurement[];
+}
+
+export interface Localization extends LocalizationInput {
+  id: number;
+  project_id: number;
+  status: string;
+  stage: string;
+  progress: number;
+  error: string | null;
+  image_url: string | null;
+  result: {
+    latitude: number;
+    longitude: number;
+    rms_db: number;
+    likely_area_km2: number;
+    likely_bounds: [number, number, number, number];
+    bounds: [number, number, number, number];
+    residuals_db: (number | null)[];
+    eirp_dbm?: number;
+    erp_w?: number;
+    rssi_at_1km_dbm?: number;
+    path_loss_exponent?: number;
+    candidates_tested?: number;
+  } | null;
+}
